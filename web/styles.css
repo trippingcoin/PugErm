@@ -1,0 +1,267 @@
+:root {
+  color-scheme: light;
+  --ink: #1d1d1b;
+  --muted: #5c5c55;
+  --accent: #b04a2f;
+  --accent-2: #2f5e4a;
+  --bg: #f7f2ec;
+  --panel: #ffffff;
+  --stroke: #e2dbd2;
+  --shadow: 0 18px 40px rgba(31, 24, 18, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Fira Sans", "Trebuchet MS", sans-serif;
+  color: var(--ink);
+  background: linear-gradient(120deg, #f7f2ec 0%, #f0efe8 40%, #f9f5f1 100%);
+  min-height: 100vh;
+}
+
+h1,
+h2,
+h3 {
+  font-family: "Merriweather", "Georgia", serif;
+  margin: 0 0 12px 0;
+}
+
+.page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 48px 24px 80px;
+  position: relative;
+  z-index: 1;
+}
+
+.bg-ornament {
+  position: fixed;
+  inset: 0;
+  background-image: radial-gradient(circle at 20% 20%, rgba(176, 74, 47, 0.12), transparent 55%),
+    radial-gradient(circle at 80% 10%, rgba(47, 94, 74, 0.14), transparent 50%),
+    radial-gradient(circle at 80% 80%, rgba(176, 74, 47, 0.08), transparent 45%);
+  pointer-events: none;
+}
+
+.hero {
+  display: grid;
+  gap: 32px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  align-items: center;
+  margin-bottom: 32px;
+  animation: fadeIn 0.8s ease-out;
+}
+
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  font-size: 12px;
+  color: var(--accent-2);
+  font-weight: 600;
+}
+
+.lead {
+  font-size: 18px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.hero-card {
+  background: var(--panel);
+  border-radius: 20px;
+  padding: 24px;
+  box-shadow: var(--shadow);
+  border: 1px solid var(--stroke);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+input[type="file"],
+input[type="text"],
+input[type="number"] {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--stroke);
+  font-size: 14px;
+  background: #fdfcfa;
+}
+
+button {
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  margin-right: 8px;
+}
+
+button.primary {
+  background: var(--accent);
+  color: white;
+  box-shadow: 0 8px 18px rgba(176, 74, 47, 0.25);
+}
+
+button.ghost {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 8px;
+}
+
+.section {
+  margin-top: 28px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 20px;
+}
+
+.panel {
+  background: var(--panel);
+  border-radius: 18px;
+  padding: 20px;
+  border: 1px solid var(--stroke);
+  box-shadow: 0 12px 30px rgba(31, 24, 18, 0.08);
+  animation: riseIn 0.6s ease-out;
+}
+
+.status {
+  padding: 14px 18px;
+  border-radius: 14px;
+  background: #fff7f2;
+  border: 1px dashed rgba(176, 74, 47, 0.4);
+  color: var(--muted);
+}
+
+.summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.summary-card {
+  background: #fbfaf7;
+  border: 1px solid var(--stroke);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.summary-card span {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.summary-card strong {
+  font-size: 18px;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.chip {
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(47, 94, 74, 0.12);
+  color: var(--accent-2);
+  font-size: 13px;
+}
+
+.shortlist {
+  display: grid;
+  gap: 12px;
+}
+
+.short-item {
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--stroke);
+  background: #fbfaf7;
+  display: grid;
+  gap: 6px;
+}
+
+.short-item span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+thead th {
+  text-align: left;
+  padding: 10px;
+  background: #f3eee7;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+tbody td {
+  padding: 10px;
+  border-bottom: 1px solid var(--stroke);
+}
+
+tbody tr:hover {
+  background: #fff8f1;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes riseIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 720px) {
+  .hero {
+    grid-template-columns: 1fr;
+  }
+  button {
+    width: 100%;
+    margin-bottom: 8px;
+  }
+}

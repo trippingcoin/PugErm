@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Скоринг сельхозпроизводителей</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="bg-ornament"></div>
+    <main class="page">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Merit-based скоринг</p>
+          <h1>Ранжирование заявителей на субсидии</h1>
+          <p class="lead">
+            Загрузите данные, получите score и объяснение факторов для каждого
+            заявителя. Shortlist формируется автоматически, финальное решение
+            остается за комиссией.
+          </p>
+        </div>
+        <div class="hero-card">
+          <h2>Запуск анализа</h2>
+          <form id="score-form">
+            <label class="field">
+              <span>Файл данных (xlsx или csv)</span>
+              <input type="file" id="file-input" accept=".xlsx,.csv" />
+            </label>
+            <label class="field">
+              <span>Target колонка (если есть)</span>
+              <input type="text" id="target-input" placeholder="например: outcome" />
+            </label>
+            <label class="field">
+              <span>ID колонка (если есть)</span>
+              <input type="text" id="id-input" placeholder="например: inn" />
+            </label>
+            <label class="field">
+              <span>Размер shortlist</span>
+              <input type="number" id="shortlist-input" value="20" min="1" />
+            </label>
+            <button class="primary" type="submit">Скоринг</button>
+            <button class="ghost" type="button" id="use-sample">
+              Использовать Data.xlsx
+            </button>
+            <p class="hint">Файл необязателен, можно использовать Data.xlsx из проекта.</p>
+          </form>
+        </div>
+      </header>
+
+      <section class="section" id="status-section">
+        <div class="status" id="status">Готово к запуску скоринга.</div>
+      </section>
+
+      <section class="section grid">
+        <div class="panel">
+          <h3>Сводка</h3>
+          <div id="summary" class="summary"></div>
+        </div>
+        <div class="panel">
+          <h3>Глобальные факторы</h3>
+          <div id="global-factors" class="chips"></div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="panel">
+          <h3>Shortlist для комиссии</h3>
+          <div id="shortlist" class="shortlist"></div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="panel">
+          <h3>Все заявители</h3>
+          <div class="table-wrap">
+            <table id="records-table">
+              <thead></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

@@ -27,14 +27,6 @@
               <input type="file" id="file-input" accept=".xlsx,.csv" />
             </label>
             <label class="field">
-              <span>Target колонка (если есть)</span>
-              <input type="text" id="target-input" placeholder="например: outcome" />
-            </label>
-            <label class="field">
-              <span>ID колонка (если есть)</span>
-              <input type="text" id="id-input" placeholder="например: inn" />
-            </label>
-            <label class="field">
               <span>Размер shortlist</span>
               <input type="number" id="shortlist-input" value="20" min="1" />
             </label>
@@ -42,7 +34,10 @@
             <button class="ghost" type="button" id="use-sample">
               Использовать Data.xlsx
             </button>
-            <p class="hint">Файл необязателен, можно использовать Data.xlsx из проекта.</p>
+            <p class="hint">
+              Для первого запуска оставьте настройки по умолчанию. Прототип сам
+              исключит технические поля, например номер строки и номер заявки.
+            </p>
           </form>
         </div>
       </header>
@@ -59,6 +54,17 @@
         <div class="panel">
           <h3>Глобальные факторы</h3>
           <div id="global-factors" class="chips"></div>
+        </div>
+      </section>
+
+      <section class="section grid">
+        <div class="panel">
+          <h3>Используемые поля</h3>
+          <div id="used-columns" class="chips"></div>
+        </div>
+        <div class="panel">
+          <h3>Исключённые поля</h3>
+          <div id="excluded-columns" class="chips"></div>
         </div>
       </section>
 

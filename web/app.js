@@ -1,16 +1,34 @@
 const form = document.getElementById("score-form");
 const fileInput = document.getElementById("file-input");
-const targetInput = document.getElementById("target-input");
-const idInput = document.getElementById("id-input");
 const shortlistInput = document.getElementById("shortlist-input");
 const useSampleButton = document.getElementById("use-sample");
 
 const statusEl = document.getElementById("status");
 const summaryEl = document.getElementById("summary");
 const globalFactorsEl = document.getElementById("global-factors");
+const usedColumnsEl = document.getElementById("used-columns");
+const excludedColumnsEl = document.getElementById("excluded-columns");
 const shortlistEl = document.getElementById("shortlist");
 const tableHead = document.querySelector("#records-table thead");
 const tableBody = document.querySelector("#records-table tbody");
+
+const BUSINESS_COLUMNS = [
+  "Область",
+  "Акимат",
+  "Направление водства",
+  "Наименование субсидирования",
+  "Статус заявки",
+  "Норматив",
+  "Причитающая сумма",
+  "Район хозяйства",
+];
+
+function humanizeMode(mode) {
+  if (mode === "unsupervised_svd") return "Prototype ranking";
+  if (mode === "supervised_classification") return "Supervised classification";
+  if (mode === "supervised_regression") return "Supervised regression";
+  return mode || "—";
+}
 
 function setStatus(message, tone = "info") {
   statusEl.textContent = message;
@@ -20,8 +38,6 @@ function setStatus(message, tone = "info") {
 
 function buildQuery() {
   const params = new URLSearchParams();
-  if (targetInput.value.trim()) params.set("target", targetInput.value.trim());
-  if (idInput.value.trim()) params.set("id", idInput.value.trim());
   if (shortlistInput.value.trim()) params.set("shortlist", shortlistInput.value.trim());
   const query = params.toString();
   return query ? `?${query}` : "";
@@ -52,6 +68,7 @@ async function submitScore(useSample = false) {
 function renderResult(data) {
   renderSummary(data.meta);
   renderGlobalFactors(data.global_factors || []);
+  renderColumns(data);
   renderShortlist(data.shortlist || []);
   renderTable(data.records || []);
 }
@@ -62,8 +79,9 @@ function renderSummary(meta) {
   const items = [
     { label: "Заявителей", value: meta.rows },
     { label: "Признаков", value: meta.features },
-    { label: "Режим", value: meta.mode },
-    { label: "Target", value: meta.target_column || "—" },
+    { label: "Исходных полей", value: meta.source_columns || "—" },
+    { label: "Использовано полей", value: meta.used_columns || "—" },
+    { label: "Режим", value: humanizeMode(meta.mode) },
     { label: "Минимум", value: meta.score_min.toFixed(2) },
     { label: "Среднее", value: meta.score_mean.toFixed(2) },
     { label: "Максимум", value: meta.score_max.toFixed(2) },
@@ -75,6 +93,38 @@ function renderSummary(meta) {
     card.innerHTML = `<span>${item.label}</span><strong>${item.value}</strong>`;
     summaryEl.appendChild(card);
   });
+}
+
+function renderColumns(data) {
+  usedColumnsEl.innerHTML = "";
+  excludedColumnsEl.innerHTML = "";
+
+  const records = data.records || [];
+  const firstAttributes = records.length > 0 ? records[0].attributes || {} : {};
+  const usedColumns = BUSINESS_COLUMNS.filter((column) => column in firstAttributes);
+  const excludedColumns = (data.meta && data.meta.excluded_columns) || [];
+
+  if (usedColumns.length === 0) {
+    usedColumnsEl.textContent = "Нет данных по используемым полям.";
+  } else {
+    usedColumns.forEach((column) => {
+      const chip = document.createElement("div");
+      chip.className = "chip";
+      chip.textContent = column;
+      usedColumnsEl.appendChild(chip);
+    });
+  }
+
+  if (excludedColumns.length === 0) {
+    excludedColumnsEl.textContent = "Нет исключённых полей.";
+  } else {
+    excludedColumns.forEach((column) => {
+      const chip = document.createElement("div");
+      chip.className = "chip";
+      chip.textContent = column;
+      excludedColumnsEl.appendChild(chip);
+    });
+  }
 }
 
 function renderGlobalFactors(factors) {
@@ -103,9 +153,13 @@ function renderShortlist(shortlist) {
     const factors = (item.top_factors || [])
       .map((f) => `${f.feature} (${f.contribution.toFixed(2)})`)
       .join(", ");
+    const attrs = item.attributes || {};
     wrap.innerHTML = `
       <strong>ID: ${item.id}</strong>
       <span>Score: ${item.score.toFixed(2)}</span>
+      <span>Регион: ${attrs["Область"] || "—"}</span>
+      <span>Программа: ${attrs["Наименование субсидирования"] || "—"}</span>
+      <span>Сумма: ${attrs["Причитающая сумма"] || "—"}</span>
       <span>Факторы: ${factors || "—"}</span>
     `;
     shortlistEl.appendChild(wrap);
@@ -120,7 +174,8 @@ function renderTable(records) {
   }
 
   const attributeKeys = Object.keys(records[0].attributes || {});
-  const columns = ["id", "score", "top_factors"].concat(attributeKeys);
+  const visibleAttributes = BUSINESS_COLUMNS.filter((column) => attributeKeys.includes(column));
+  const columns = ["id", "score", "top_factors"].concat(visibleAttributes);
 
   const headRow = document.createElement("tr");
   columns.forEach((col) => {

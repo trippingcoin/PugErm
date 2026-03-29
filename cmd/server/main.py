@@ -7,6 +7,7 @@ import tempfile
 from typing import Optional, Tuple
 
 from fastapi import FastAPI, File, Query, UploadFile
+from fastapi.responses import FileResponse
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 import uvicorn
@@ -14,7 +15,7 @@ import uvicorn
 DEFAULT_INPUT = "Data.xlsx"
 
 app = FastAPI()
-app.mount("/", StaticFiles(directory="web", html=True), name="static")
+app.mount("/static", StaticFiles(directory="web"), name="static")
 
 
 def env_or(key: str, fallback: str) -> str:
@@ -45,6 +46,21 @@ def error_payload(message: str, detail: Optional[str]) -> dict:
     if detail:
         payload["detail"] = detail
     return payload
+
+
+@app.get("/")
+async def index():
+    return FileResponse("web/index.html")
+
+
+@app.get("/app.js")
+async def app_js():
+    return FileResponse("web/app.js", media_type="application/javascript")
+
+
+@app.get("/styles.css")
+async def styles_css():
+    return FileResponse("web/styles.css", media_type="text/css")
 
 
 @app.post("/api/score")
@@ -116,7 +132,7 @@ async def score(
 
 
 def main() -> None:
-    addr = env_or("ADDR", ":8080")
+    addr = env_or("ADDR", "127.0.0.1:8080")
     host, port = parse_addr(addr)
     uvicorn.run(app, host=host, port=port)
 

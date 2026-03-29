@@ -1,7 +1,7 @@
 import argparse
 import json
 import math
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -50,6 +50,39 @@ def split_features(df: pd.DataFrame, id_col: Optional[str], target_col: Optional
 	cols = list(df.columns)
 	drop_cols = [c for c in [id_col, target_col] if c in cols]
 	return df.drop(columns=drop_cols) if drop_cols else df.copy()
+
+
+def validate_requested_column(df: pd.DataFrame, column: str, label: str) -> str:
+	if column and column not in df.columns:
+		raise SystemExit(f"{label} column '{column}' was not found in the input file.")
+	return column
+
+
+def infer_excluded_columns(df: pd.DataFrame, id_col: Optional[str], target_col: Optional[str]) -> Tuple[List[str], List[str]]:
+	excluded: List[str] = []
+	reasons: List[str] = []
+
+	if id_col and id_col in df.columns:
+		excluded.append(id_col)
+		reasons.append(f"{id_col}: identifier column")
+
+	if target_col and target_col in df.columns:
+		excluded.append(target_col)
+		reasons.append(f"{target_col}: target column")
+
+	for col in df.columns:
+		low = str(col).lower()
+		if col in excluded:
+			continue
+		if any(token in low for token in ["№", "номер", "id", "inn", "bin", "ogrn", "registry", "рег"]):
+			excluded.append(col)
+			reasons.append(f"{col}: technical or identifier-like column")
+			continue
+		if any(token in low for token in ["date", "дата", "time", "время"]):
+			excluded.append(col)
+			reasons.append(f"{col}: raw timestamp column")
+
+	return excluded, reasons
 
 
 def build_preprocessor(numeric_cols: List[str], categorical_cols: List[str]) -> ColumnTransformer:
@@ -115,21 +148,34 @@ def main() -> None:
 	shortlist_size = max(1, int(args.shortlist))
 
 	df = read_dataframe(args.input)
-	df = df.dropna(axis=0, how="all").dropna(axis=1, how="all")
+	df = df.dropna(axis=0, how="all").dropna(axis=1, how="all").reset_index(drop=True)
 
 	if df.empty:
 		raise SystemExit("Input data is empty after cleaning.")
 
-	id_col = args.id_column.strip() or pick_id_column(df.columns.tolist())
-	target_col = args.target.strip() or pick_target_column(df.columns.tolist())
+	requested_id_col = args.id_column.strip()
+	requested_target_col = args.target.strip()
+	validate_requested_column(df, requested_id_col, "ID")
+	validate_requested_column(df, requested_target_col, "Target")
+
+	id_col = requested_id_col or pick_id_column(df.columns.tolist())
+	target_col = requested_target_col or pick_target_column(df.columns.tolist())
 	if target_col not in df.columns:
 		target_col = None
 	if id_col not in df.columns:
 		id_col = None
 
-	features = split_features(df, id_col, target_col)
+	excluded_cols, excluded_reasons = infer_excluded_columns(df, id_col, target_col)
+	features = df.drop(columns=excluded_cols, errors="ignore")
+
+	if features.empty:
+		raise SystemExit("No usable feature columns remain after excluding identifiers and timestamps.")
+
 	numeric_cols = features.select_dtypes(include=["number"]).columns.tolist()
 	categorical_cols = [c for c in features.columns if c not in numeric_cols]
+
+	if not numeric_cols and not categorical_cols:
+		raise SystemExit("No usable numeric or categorical features were found.")
 
 	preprocessor = build_preprocessor(numeric_cols, categorical_cols)
 	x_proc = preprocessor.fit_transform(features)
@@ -204,11 +250,15 @@ def main() -> None:
 	meta = {
 		"rows": int(df.shape[0]),
 		"features": int(x_dense.shape[1]),
+		"source_columns": int(df.shape[1]),
+		"used_columns": int(features.shape[1]),
 		"target_column": model_info["target_column"],
+		"id_column": id_col,
 		"mode": model_info["mode"],
 		"score_min": float(np.min(scores)),
 		"score_max": float(np.max(scores)),
 		"score_mean": float(np.mean(scores)),
+		"excluded_columns": excluded_reasons,
 	}
 
 	output = {

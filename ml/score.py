@@ -1,275 +1,43 @@
+#!/usr/bin/env python3
 import argparse
-import json
-import math
-from typing import List, Optional, Tuple
+import sys
+from pathlib import Path
 
-import numpy as np
-import pandas as pd
-from sklearn.compose import ColumnTransformer
-from sklearn.decomposition import TruncatedSVD
-from sklearn.impute import SimpleImputer
-from sklearn.linear_model import LogisticRegression, Ridge
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from app.services.scoring_service import FilterOptions, ScoringService
 
 
 def parse_args() -> argparse.Namespace:
-	parser = argparse.ArgumentParser(description="Score agricultural producers with ML.")
-	parser.add_argument("--input", default="Data.xlsx", help="Path to input file (xlsx or csv).")
-	parser.add_argument("--target", default="", help="Optional target column for supervised scoring.")
-	parser.add_argument("--id-column", default="", help="Optional id column.")
-	parser.add_argument("--shortlist", default="20", help="Shortlist size.")
-	return parser.parse_args()
-
-
-def read_dataframe(path: str) -> pd.DataFrame:
-	if path.lower().endswith(".csv"):
-		return pd.read_csv(path)
-	return pd.read_excel(path)
-
-
-def pick_id_column(columns: List[str]) -> Optional[str]:
-	candidates = ["id", "inn", "bin", "ogrn", "reg", "registry", "farmer"]
-	for col in columns:
-		low = str(col).lower()
-		if any(token in low for token in candidates):
-			return col
-	return None
-
-
-def pick_target_column(columns: List[str]) -> Optional[str]:
-	candidates = ["target", "label", "outcome", "effect", "result", "profit", "revenue", "efficiency", "score"]
-	for col in columns:
-		low = str(col).lower()
-		if any(token in low for token in candidates):
-			return col
-	return None
-
-
-def split_features(df: pd.DataFrame, id_col: Optional[str], target_col: Optional[str]) -> pd.DataFrame:
-	cols = list(df.columns)
-	drop_cols = [c for c in [id_col, target_col] if c in cols]
-	return df.drop(columns=drop_cols) if drop_cols else df.copy()
-
-
-def validate_requested_column(df: pd.DataFrame, column: str, label: str) -> str:
-	if column and column not in df.columns:
-		raise SystemExit(f"{label} column '{column}' was not found in the input file.")
-	return column
-
-
-def infer_excluded_columns(df: pd.DataFrame, id_col: Optional[str], target_col: Optional[str]) -> Tuple[List[str], List[str]]:
-	excluded: List[str] = []
-	reasons: List[str] = []
-
-	if id_col and id_col in df.columns:
-		excluded.append(id_col)
-		reasons.append(f"{id_col}: identifier column")
-
-	if target_col and target_col in df.columns:
-		excluded.append(target_col)
-		reasons.append(f"{target_col}: target column")
-
-	for col in df.columns:
-		low = str(col).lower()
-		if col in excluded:
-			continue
-		if any(token in low for token in ["№", "номер", "id", "inn", "bin", "ogrn", "registry", "рег"]):
-			excluded.append(col)
-			reasons.append(f"{col}: technical or identifier-like column")
-			continue
-		if any(token in low for token in ["date", "дата", "time", "время"]):
-			excluded.append(col)
-			reasons.append(f"{col}: raw timestamp column")
-
-	return excluded, reasons
-
-
-def build_preprocessor(numeric_cols: List[str], categorical_cols: List[str]) -> ColumnTransformer:
-	numeric_pipeline = Pipeline(
-		steps=[
-			("imputer", SimpleImputer(strategy="median")),
-			("scaler", StandardScaler()),
-		]
-	)
-	categorical_pipeline = Pipeline(
-		steps=[
-			("imputer", SimpleImputer(strategy="most_frequent")),
-			("onehot", OneHotEncoder(handle_unknown="ignore")),
-		]
-	)
-	return ColumnTransformer(
-		transformers=[
-			("num", numeric_pipeline, numeric_cols),
-			("cat", categorical_pipeline, categorical_cols),
-		],
-		remainder="drop",
-	)
-
-
-def get_feature_names(preprocessor: ColumnTransformer, numeric_cols: List[str], categorical_cols: List[str]) -> List[str]:
-	feature_names: List[str] = []
-	if numeric_cols:
-		feature_names.extend(numeric_cols)
-	if categorical_cols:
-		onehot = preprocessor.named_transformers_.get("cat")
-		if onehot is not None:
-			encoder = onehot.named_steps.get("onehot")
-			if encoder is not None:
-				feature_names.extend(encoder.get_feature_names_out(categorical_cols).tolist())
-	return feature_names
-
-
-def normalize_scores(values: np.ndarray) -> np.ndarray:
-	value_min = float(np.min(values))
-	value_max = float(np.max(values))
-	if math.isclose(value_min, value_max):
-		return np.full_like(values, 50.0, dtype=float)
-	return (values - value_min) / (value_max - value_min) * 100.0
-
-
-def compute_top_factors(contributions: np.ndarray, feature_names: List[str], top_k: int = 3) -> List[dict]:
-	if contributions.size == 0 or not feature_names:
-		return []
-	indices = np.argsort(np.abs(contributions))[-top_k:][::-1]
-	result = []
-	for idx in indices:
-		result.append(
-			{
-				"feature": feature_names[idx],
-				"contribution": float(contributions[idx]),
-			}
-		)
-	return result
+    parser = argparse.ArgumentParser(description="Subsidy scoring CLI")
+    parser.add_argument("--input", default="Data.xlsx", help="Path to xlsx/csv/json file")
+    parser.add_argument("--target", default="", help="Optional target column")
+    parser.add_argument("--id-column", default="", help="Optional id column")
+    parser.add_argument("--shortlist", default="20", help="Shortlist size")
+    parser.add_argument("--region", default="", help="Optional region filter")
+    parser.add_argument("--farm-size", default="", help="Optional farm size filter: small/medium/large")
+    parser.add_argument("--subsidy-type", default="", help="Optional subsidy type filter")
+    return parser.parse_args()
 
 
 def main() -> None:
-	args = parse_args()
-	shortlist_size = max(1, int(args.shortlist))
-
-	df = read_dataframe(args.input)
-	df = df.dropna(axis=0, how="all").dropna(axis=1, how="all").reset_index(drop=True)
-
-	if df.empty:
-		raise SystemExit("Input data is empty after cleaning.")
-
-	requested_id_col = args.id_column.strip()
-	requested_target_col = args.target.strip()
-	validate_requested_column(df, requested_id_col, "ID")
-	validate_requested_column(df, requested_target_col, "Target")
-
-	id_col = requested_id_col or pick_id_column(df.columns.tolist())
-	target_col = requested_target_col or pick_target_column(df.columns.tolist())
-	if target_col not in df.columns:
-		target_col = None
-	if id_col not in df.columns:
-		id_col = None
-
-	excluded_cols, excluded_reasons = infer_excluded_columns(df, id_col, target_col)
-	features = df.drop(columns=excluded_cols, errors="ignore")
-
-	if features.empty:
-		raise SystemExit("No usable feature columns remain after excluding identifiers and timestamps.")
-
-	numeric_cols = features.select_dtypes(include=["number"]).columns.tolist()
-	categorical_cols = [c for c in features.columns if c not in numeric_cols]
-
-	if not numeric_cols and not categorical_cols:
-		raise SystemExit("No usable numeric or categorical features were found.")
-
-	preprocessor = build_preprocessor(numeric_cols, categorical_cols)
-	x_proc = preprocessor.fit_transform(features)
-	feature_names = get_feature_names(preprocessor, numeric_cols, categorical_cols)
-
-	mode = "unsupervised"
-	model_info = {"target_column": target_col, "mode": mode}
-
-	x_dense = x_proc.toarray() if hasattr(x_proc, "toarray") else np.asarray(x_proc)
-	scores: Optional[np.ndarray] = None
-	coef: Optional[np.ndarray] = None
-
-	if target_col is not None:
-		y_raw = df[target_col]
-		if y_raw.dtype == object:
-			y_encoded, _ = pd.factorize(y_raw)
-			y_vals = pd.Series(y_encoded, index=y_raw.index, dtype="float64")
-		else:
-			y_vals = pd.to_numeric(y_raw, errors="coerce")
-
-		mask = y_vals.notna()
-		if mask.sum() >= 10 and y_vals[mask].nunique() > 1:
-			y_train = y_vals[mask].values
-			x_train = x_dense[mask.values]
-			unique = np.unique(y_train)
-			if len(unique) == 2:
-				model = LogisticRegression(max_iter=2000)
-				model.fit(x_train, y_train)
-				proba = model.predict_proba(x_dense)[:, 1]
-				scores = proba * 100.0
-				coef = model.coef_[0]
-				mode = "supervised_classification"
-			else:
-				model = Ridge(alpha=1.0)
-				model.fit(x_train, y_train)
-				pred_scores = model.predict(x_dense)
-				scores = normalize_scores(pred_scores)
-				coef = model.coef_
-				mode = "supervised_regression"
-			model_info["mode"] = mode
-		else:
-			target_col = None
-			model_info["target_column"] = None
-
-	if target_col is None:
-		svd = TruncatedSVD(n_components=1, random_state=42)
-		raw_scores = svd.fit_transform(x_dense).reshape(-1)
-		scores = normalize_scores(raw_scores)
-		coef = svd.components_[0]
-		mode = "unsupervised_svd"
-		model_info["mode"] = mode
-
-	if scores is None or coef is None:
-		raise SystemExit("Unable to compute scores with the provided data.")
-
-	contributions = x_dense * coef
-	global_factors = compute_top_factors(coef, feature_names, top_k=10)
-
-	records = []
-	for idx, row in df.iterrows():
-		record_id = row[id_col] if id_col is not None else idx + 1
-		record = {
-			"id": str(record_id),
-			"score": float(scores[idx]),
-			"top_factors": compute_top_factors(contributions[idx], feature_names, top_k=3),
-			"attributes": row.replace({np.nan: None}).to_dict(),
-		}
-		records.append(record)
-
-	shortlist = sorted(records, key=lambda r: r["score"], reverse=True)[:shortlist_size]
-
-	meta = {
-		"rows": int(df.shape[0]),
-		"features": int(x_dense.shape[1]),
-		"source_columns": int(df.shape[1]),
-		"used_columns": int(features.shape[1]),
-		"target_column": model_info["target_column"],
-		"id_column": id_col,
-		"mode": model_info["mode"],
-		"score_min": float(np.min(scores)),
-		"score_max": float(np.max(scores)),
-		"score_mean": float(np.mean(scores)),
-		"excluded_columns": excluded_reasons,
-	}
-
-	output = {
-		"meta": meta,
-		"global_factors": global_factors,
-		"records": records,
-		"shortlist": shortlist,
-	}
-
-	print(json.dumps(output, ensure_ascii=False, indent=2))
+    args = parse_args()
+    service = ScoringService()
+    result = service.run_scoring(
+        input_path=args.input,
+        shortlist_n=max(1, int(args.shortlist)),
+        target_column=args.target.strip() or None,
+        id_column=args.id_column.strip() or None,
+        filters=FilterOptions(
+            region=args.region.strip() or None,
+            farm_size=args.farm_size.strip() or None,
+            subsidy_type=args.subsidy_type.strip() or None,
+        ),
+    )
+    print(result.model_dump_json(indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":
-	main()
+    main()

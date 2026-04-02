@@ -1,0 +1,51 @@
+@startuml
+title PugErm - Архитектура прототипа для Stage 1
+
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam componentStyle rectangle
+skinparam packageStyle rectangle
+skinparam ArrowColor #4f5b66
+skinparam DefaultFontName Arial
+skinparam DefaultTextAlignment left
+
+actor "Комиссия /\nЭксперт" as User
+
+rectangle "Frontend\nweb/index.html\nweb/app.js\nweb/styles.css" as FE
+
+rectangle "Backend API\nFastAPI\ncmd/server/main.py" as API
+
+rectangle "ML Scoring Engine\nml/score.py" as ML
+
+database "Demo dataset\nData.xlsx" as DATA
+database "Реестровая выгрузка\nВыгрузка по выданным\nсубсидиям 2025" as REGISTRY
+file "Нормативная база\nПравила субсидирования.pdf" as RULES
+
+rectangle "Explainability Layer\n- global factors\n- local factors\n- excluded fields" as XAI
+
+rectangle "Decision Support Result\n- score\n- shortlist\n- factors\n- summary" as RESULT
+
+cloud "Следующий этап\nData Adapter /\nRule Layer" as NEXT
+
+User --> FE : загрузка файла\nпросмотр результатов
+FE --> API : POST /api/score
+API --> ML : запуск scoring pipeline
+DATA --> ML : demo input
+REGISTRY --> NEXT : реальная выгрузка
+RULES --> NEXT : нормативные правила
+NEXT ..> ML : нормализация и\nrule enrichment
+ML --> XAI : расчёт факторов
+XAI --> RESULT : explainable output
+ML --> RESULT : score и shortlist
+RESULT --> API : JSON
+API --> FE : результат анализа
+FE --> User : shortlist для комиссии
+
+note right of RESULT
+AI поддерживает решение,
+но не заменяет эксперта.
+Финальный выбор остаётся
+за комиссией.
+end note
+
+@enduml

@@ -3,90 +3,181 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Скоринг сельхозпроизводителей</title>
+    <title>AI Gov Scoring Platform</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <div class="bg-ornament"></div>
-    <main class="page">
-      <header class="hero">
-        <div>
-          <p class="eyebrow">Merit-based скоринг</p>
-          <h1>Ранжирование заявителей на субсидии</h1>
-          <p class="lead">
-            Загрузите данные, получите score и объяснение факторов для каждого
-            заявителя. Shortlist формируется автоматически, финальное решение
-            остается за комиссией.
-          </p>
+    <div class="bg"></div>
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-dot"></div>
+          <div>
+            <p class="brand-title">AI Gov Scoring</p>
+            <p class="brand-sub">Case 2 · Subsidy Intelligence</p>
+          </div>
         </div>
-        <div class="hero-card">
-          <h2>Запуск анализа</h2>
-          <form id="score-form">
+        <nav class="menu">
+          <a class="menu-item active" href="#overview">Обзор</a>
+          <a class="menu-item" href="#shortlist">Shortlist</a>
+          <a class="menu-item" href="#analytics">Аналитика</a>
+          <a class="menu-item" href="#records">Заявители</a>
+        </nav>
+        <div class="sidebar-foot">
+          <p>AI помогает комиссии принимать решения, но не заменяет эксперта.</p>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Government Decision Support</p>
+            <h1>Скоринг заявок на субсидии</h1>
+          </div>
+          <div class="topbar-chip">Explainable AI · Live Scoring</div>
+        </header>
+
+        <section class="card control-card" id="overview">
+          <div class="card-head">
+            <h2>Запуск анализа</h2>
+            <p>Загрузите датасет или используйте демонстрационный файл.</p>
+          </div>
+          <form id="score-form" class="control-form">
             <label class="field">
-              <span>Файл данных (xlsx или csv)</span>
-              <input type="file" id="file-input" accept=".xlsx,.csv" />
+              <span>Файл данных (xlsx, csv, json)</span>
+              <input type="file" id="file-input" accept=".xlsx,.csv,.json" />
             </label>
             <label class="field">
               <span>Размер shortlist</span>
               <input type="number" id="shortlist-input" value="20" min="1" />
             </label>
-            <button class="primary" type="submit">Скоринг</button>
-            <button class="ghost" type="button" id="use-sample">
-              Использовать Data.xlsx
-            </button>
-            <p class="hint">
-              Для первого запуска оставьте настройки по умолчанию. Прототип сам
-              исключит технические поля, например номер строки и номер заявки.
-            </p>
+            <label class="field">
+              <span>Регион</span>
+              <input type="text" id="region-input" placeholder="например: область Абай" />
+            </label>
+            <label class="field">
+              <span>Размер хозяйства</span>
+              <select id="farm-size-input">
+                <option value="">Все</option>
+                <option value="small">Small</option>
+                <option value="medium">Medium</option>
+                <option value="large">Large</option>
+              </select>
+            </label>
+            <label class="field span-2">
+              <span>Тип субсидии</span>
+              <input type="text" id="subsidy-type-input" placeholder="наименование субсидирования" />
+            </label>
+            <div class="actions span-2">
+              <button class="primary" id="run-btn" type="submit">Запустить скоринг</button>
+              <button class="ghost" type="button" id="use-sample">Использовать Data.xlsx</button>
+            </div>
           </form>
-        </div>
-      </header>
+          <div class="status" id="status">Готово к запуску скоринга.</div>
+        </section>
 
-      <section class="section" id="status-section">
-        <div class="status" id="status">Готово к запуску скоринга.</div>
-      </section>
+        <section class="grid grid-2">
+          <article class="card">
+            <div class="card-head">
+              <h3>Сводка</h3>
+            </div>
+            <div id="summary" class="summary"></div>
+          </article>
+          <article class="card">
+            <div class="card-head">
+              <h3>Feature Importance</h3>
+            </div>
+            <div id="global-factors" class="chips"></div>
+          </article>
+        </section>
 
-      <section class="section grid">
-        <div class="panel">
-          <h3>Сводка</h3>
-          <div id="summary" class="summary"></div>
-        </div>
-        <div class="panel">
-          <h3>Глобальные факторы</h3>
-          <div id="global-factors" class="chips"></div>
-        </div>
-      </section>
+        <section class="grid grid-2" id="analytics">
+          <article class="card">
+            <div class="card-head">
+              <h3>Системная логика</h3>
+            </div>
+            <p id="system-explanation" class="body-text">
+              Модель ранжирует заявки по продуктивности, стабильности и эффективности использования субсидий.
+            </p>
+          </article>
+          <article class="card">
+            <div class="card-head">
+              <h3>Fairness Check</h3>
+            </div>
+            <div id="fairness" class="stack"></div>
+          </article>
+        </section>
 
-      <section class="section grid">
-        <div class="panel">
-          <h3>Используемые поля</h3>
-          <div id="used-columns" class="chips"></div>
-        </div>
-        <div class="panel">
-          <h3>Исключённые поля</h3>
-          <div id="excluded-columns" class="chips"></div>
-        </div>
-      </section>
+        <section class="grid grid-2">
+          <article class="card">
+            <div class="card-head">
+              <h3>Используемые поля</h3>
+            </div>
+            <div id="used-columns" class="chips"></div>
+          </article>
+          <article class="card">
+            <div class="card-head">
+              <h3>Исключённые поля</h3>
+            </div>
+            <div id="excluded-columns" class="chips"></div>
+          </article>
+        </section>
 
-      <section class="section">
-        <div class="panel">
-          <h3>Shortlist для комиссии</h3>
-          <div id="shortlist" class="shortlist"></div>
-        </div>
-      </section>
+        <section class="card" id="shortlist-section">
+          <div class="card-head">
+            <h3>Shortlist для комиссии</h3>
+          </div>
+          <div id="shortlist" class="stack"></div>
+        </section>
 
-      <section class="section">
-        <div class="panel">
-          <h3>Все заявители</h3>
+        <section class="grid grid-2">
+          <article class="card">
+            <div class="card-head">
+              <h3>Top Ranking</h3>
+            </div>
+            <canvas id="ranking-chart" height="220"></canvas>
+          </article>
+          <article class="card">
+            <div class="card-head">
+              <h3>Score Distribution</h3>
+            </div>
+            <canvas id="distribution-chart" height="220"></canvas>
+          </article>
+        </section>
+
+        <section class="card" id="records">
+          <div class="card-head">
+            <h3>Все заявители</h3>
+            <p>Кликните по строке для объяснения и compliance-флагов.</p>
+          </div>
           <div class="table-wrap">
             <table id="records-table">
               <thead></thead>
               <tbody></tbody>
             </table>
           </div>
+        </section>
+      </main>
+    </div>
+
+    <aside class="drawer" id="explanation-drawer" aria-hidden="true">
+      <div class="drawer-backdrop" id="drawer-backdrop"></div>
+      <div class="drawer-panel">
+        <div class="drawer-head">
+          <h3>Объяснение по заявителю</h3>
+          <button id="drawer-close" class="drawer-close" type="button">Закрыть</button>
         </div>
-      </section>
-    </main>
+        <div id="record-explanation" class="drawer-content">
+          Кликните по строке таблицы для детального объяснения.
+        </div>
+      </div>
+    </aside>
 
     <script src="/app.js"></script>
   </body>

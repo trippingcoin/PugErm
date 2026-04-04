@@ -83,7 +83,7 @@ class ScoreMeta(BaseModel):
     ranking_metrics: Dict[str, float] = Field(default_factory=dict)
     model_version: str = "ranker-2026.1"
     feature_version: str = "features-2026.1"
-    policy_version: str = "rules-2026.1"
+    policy_version: str = "rules-2026.3"
 
 
 class CommissionDecision(BaseModel):

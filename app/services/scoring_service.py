@@ -31,7 +31,7 @@ from app.utils.logger import get_logger
 logger = get_logger("scoring_service")
 MODEL_VERSION = "ranker-2026.1"
 FEATURE_VERSION = "features-2026.1"
-POLICY_VERSION = "rules-2026.1"
+POLICY_VERSION = "rules-2026.3"
 
 
 @dataclass

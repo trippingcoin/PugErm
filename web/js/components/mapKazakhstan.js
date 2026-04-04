@@ -60,9 +60,12 @@ function makeProjector(bbox) {
   const { width, height, padding } = VIEWBOX;
   const w = Math.max(1, bbox.maxLon - bbox.minLon);
   const h = Math.max(1, bbox.maxLat - bbox.minLat);
+  const scale = Math.min((width - padding * 2) / w, (height - padding * 2) / h);
+  const xOffset = padding + (width - padding * 2 - w * scale) / 2;
+  const yOffset = padding + (height - padding * 2 - h * scale) / 2;
   return (lon, lat) => {
-    const x = ((lon - bbox.minLon) / w) * (width - padding * 2) + padding;
-    const y = ((bbox.maxLat - lat) / h) * (height - padding * 2) + padding;
+    const x = (lon - bbox.minLon) * scale + xOffset;
+    const y = (bbox.maxLat - lat) * scale + yOffset;
     return [x, y];
   };
 }

@@ -2,7 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import re
 from typing import Dict, List
+
+from app.services.regulatory_data import (
+    NATURAL_LOSS_MAX_PCT,
+    PASTURE_MIN_RESTORED_HA,
+    SPECIES_PATTERNS,
+    SUBSIDY_PROGRAM_COMPACTS,
+)
 
 
 @dataclass
@@ -44,7 +52,7 @@ RULE_SPECS: Dict[str, RuleSpec] = {
         policy_id="P-002",
         category="financial",
         severity="high",
-        source="Rules Appendix 1",
+        source="V1900018404 Appendix 1",
         message="Норматив должен быть положительным.",
     ),
     "DISTRICT_PRESENT": RuleSpec(
@@ -65,14 +73,14 @@ RULE_SPECS: Dict[str, RuleSpec] = {
         policy_id="P-005",
         category="timeline",
         severity="medium",
-        source="Rules Appendix 2 submission windows",
+        source="V1900018404 Appendix 2",
         message="Дата подачи должна попадать в окно приема заявок.",
     ),
     "STATUS_RISK": RuleSpec(
         policy_id="P-006",
         category="status",
         severity="high",
-        source="Rules Appendix 4 p.9 refusal grounds",
+        source="V1900018404 Appendix 4",
         message="Отклоненные/отозванные заявки не рекомендуются автоматически.",
     ),
     "AMOUNT_NORMATIVE_RATIO": RuleSpec(
@@ -88,6 +96,27 @@ RULE_SPECS: Dict[str, RuleSpec] = {
         severity="medium",
         source="Rules non-subsidized cases",
         message="Потенциальный сигнал повторного субсидирования.",
+    ),
+    "NATURAL_LOSS_WITHIN_NORMS": RuleSpec(
+        policy_id="P-009",
+        category="animal_welfare",
+        severity="medium",
+        source="V1500012488",
+        message="Естественная убыль (падеж) не должна превышать нормативы по видам животных.",
+    ),
+    "PASTURE_LOAD_MIN_AREA": RuleSpec(
+        policy_id="P-010",
+        category="land",
+        severity="medium",
+        source="V1500011064",
+        message="Нагрузка на пастбища должна соответствовать минимальным нормативам площади.",
+    ),
+    "SUBSIDY_PROGRAM_LISTED": RuleSpec(
+        policy_id="P-011",
+        category="program",
+        severity="medium",
+        source="V1900018404 Appendix 1",
+        message="Наименование субсидирования должно соответствовать перечню Приложения 1.",
     ),
 }
 
@@ -105,6 +134,36 @@ def _lower(value) -> str:
     if value is None:
         return ""
     return str(value).strip().lower()
+
+
+def _normalize_program_text(value: object) -> str:
+    text = str(value or "").lower()
+    text = text.replace("ё", "е")
+    text = re.sub(r"[\\W_]+", " ", text)
+    return re.sub(r"\\s+", " ", text).strip()
+
+
+def _compact_text(value: object) -> str:
+    text = str(value or "").lower().replace("ё", "е")
+    return re.sub(r"[^0-9a-zа-я]+", "", text)
+
+
+def _detect_species(*values: object) -> str | None:
+    haystack = " ".join(_normalize_program_text(v) for v in values if v)
+    for species, tokens in SPECIES_PATTERNS.items():
+        if any(token in haystack for token in tokens):
+            return species
+    return None
+
+
+def _find_numeric_attr(attributes: Dict[str, object], keys: List[str]) -> float | None:
+    for key, value in attributes.items():
+        norm_key = _normalize_program_text(key)
+        if any(k in norm_key for k in keys):
+            val = _to_float(value)
+            if val is not None:
+                return val
+    return None
 
 
 def _parse_dt(value: object) -> datetime | None:
@@ -150,6 +209,22 @@ def evaluate_record_rules(attributes: Dict[str, object]) -> RuleEvaluation:
             severity="high" if not norm_ok else "info",
             message="Норматив должен быть положительным.",
             passed=norm_ok,
+        )
+    )
+
+    program_listed = True
+    if program:
+        compact = _compact_text(program)
+        if len(compact) >= 8:
+            program_listed = any(
+                compact in known or known in compact for known in SUBSIDY_PROGRAM_COMPACTS
+            )
+    flags.append(
+        RuleFlag(
+            code="SUBSIDY_PROGRAM_LISTED",
+            severity="medium" if not program_listed else "info",
+            message="Наименование субсидирования должно соответствовать перечню Приложения 1.",
+            passed=program_listed,
         )
     )
 
@@ -240,6 +315,54 @@ def evaluate_record_rules(attributes: Dict[str, object]) -> RuleEvaluation:
         )
     )
 
+    species = _detect_species(
+        direction,
+        program,
+        attributes.get("Вид животного"),
+        attributes.get("Порода"),
+        attributes.get("Категория животных"),
+    )
+    mortality = _find_numeric_attr(
+        attributes,
+        ["падеж", "естественн", "убыль", "mortality", "loss"],
+    )
+    if mortality is not None and species in NATURAL_LOSS_MAX_PCT:
+        if mortality <= 1:
+            mortality *= 100
+        max_pct = NATURAL_LOSS_MAX_PCT[species]
+        ok = mortality <= max_pct
+        flags.append(
+            RuleFlag(
+                code="NATURAL_LOSS_WITHIN_NORMS",
+                severity="medium" if not ok else "info",
+                message=f"Естественная убыль {mortality:.2f}% при нормативе до {max_pct:.2f}%.",
+                passed=ok,
+            )
+        )
+
+    pasture_area = _find_numeric_attr(attributes, ["площадь пастби", "пастбищ", "pasture area", "pasture"])
+    headcount = _find_numeric_attr(attributes, ["поголов", "голов", "headcount", "livestock", "числен"])
+    if (
+        pasture_area is not None
+        and headcount is not None
+        and headcount > 0
+        and species in PASTURE_MIN_RESTORED_HA
+    ):
+        area_per_head = pasture_area / headcount
+        min_required = PASTURE_MIN_RESTORED_HA[species]
+        ok = area_per_head >= min_required
+        flags.append(
+            RuleFlag(
+                code="PASTURE_LOAD_MIN_AREA",
+                severity="medium" if not ok else "info",
+                message=(
+                    f"Площадь пастбищ на 1 голову: {area_per_head:.2f} га "
+                    f"(минимум {min_required:.2f} га на восстановленных угодьях)."
+                ),
+                passed=ok,
+            )
+        )
+
     hard_fail_codes = {
         "AMOUNT_POSITIVE",
         "NORMATIVE_POSITIVE",
@@ -251,6 +374,9 @@ def evaluate_record_rules(attributes: Dict[str, object]) -> RuleEvaluation:
         "APPLICATION_WINDOW_20JAN_20DEC",
         "AMOUNT_NORMATIVE_RATIO",
         "NO_REPEAT_SUBSIDY_SIGNAL",
+        "NATURAL_LOSS_WITHIN_NORMS",
+        "PASTURE_LOAD_MIN_AREA",
+        "SUBSIDY_PROGRAM_LISTED",
     }
 
     hard_failed = [f for f in flags if f.code in hard_fail_codes and not f.passed]

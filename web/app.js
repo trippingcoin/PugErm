@@ -1,324 +1,386 @@
-const form = document.getElementById("score-form");
-const fileInput = document.getElementById("file-input");
-const shortlistInput = document.getElementById("shortlist-input");
-const regionInput = document.getElementById("region-input");
-const farmSizeInput = document.getElementById("farm-size-input");
-const subsidyTypeInput = document.getElementById("subsidy-type-input");
-const useSampleButton = document.getElementById("use-sample");
-const runButton = document.getElementById("run-btn");
-const drawer = document.getElementById("explanation-drawer");
-const drawerBackdrop = document.getElementById("drawer-backdrop");
-const drawerClose = document.getElementById("drawer-close");
+import { dom } from "/static/js/dom.js";
+import { state } from "/static/js/state.js";
+import { renderSummary, renderRankingMetrics } from "/static/js/components/metrics.js";
+import { renderShortlist } from "/static/js/components/shortlist.js";
+import { renderFairness } from "/static/js/components/fairness.js";
+import { renderRecordsTable } from "/static/js/components/recordsTable.js";
+import { renderColumns } from "/static/js/components/columns.js";
+import { renderKazakhstanMap } from "/static/js/components/mapKazakhstan.js";
+import { renderRecordExplanation } from "/static/js/components/drawer.js";
+import { renderBarChart } from "/static/js/components/charts.js";
+import { getAuditApi, getDecisionApi, getLastScoreApi, getRecordsApi, getScenarioApi, getTopApi, saveDecisionApi, scoreApi } from "/static/js/services/api.js";
+import { inferViewFromHash, switchView } from "/static/js/router/viewRouter.js";
 
-const statusEl = document.getElementById("status");
-const summaryEl = document.getElementById("summary");
-const globalFactorsEl = document.getElementById("global-factors");
-const usedColumnsEl = document.getElementById("used-columns");
-const excludedColumnsEl = document.getElementById("excluded-columns");
-const shortlistEl = document.getElementById("shortlist");
-const fairnessEl = document.getElementById("fairness");
-const systemExplanationEl = document.getElementById("system-explanation");
-const explanationEl = document.getElementById("record-explanation");
-const rankingCanvas = document.getElementById("ranking-chart");
-const distributionCanvas = document.getElementById("distribution-chart");
-
-const tableHead = document.querySelector("#records-table thead");
-const tableBody = document.querySelector("#records-table tbody");
-
-const BUSINESS_COLUMNS = [
-  "Область",
-  "Акимат",
-  "Направление водства",
-  "Наименование субсидирования",
-  "Статус заявки",
-  "Норматив",
-  "Причитающая сумма",
-  "Район хозяйства",
-];
-
-let latestRecords = [];
+let progressTimer = null;
 
 function setStatus(message, tone = "info") {
-  statusEl.textContent = message;
-  statusEl.style.borderColor = tone === "error" ? "rgba(255, 123, 123, 0.7)" : "rgba(120, 147, 201, 0.35)";
-  statusEl.style.color = tone === "error" ? "#ff9d9d" : "#b6c5e9";
+  dom.statusEl.textContent = message;
+  dom.statusEl.style.borderLeftColor = tone === "error" ? "var(--red)" : tone === "success" ? "var(--green)" : "var(--blue)";
+}
+
+function startProgress() {
+  if (!dom.loadingProgressEl || !dom.loadingProgressTextEl) return;
+  const stages = [
+    "Загрузка файла и валидация...",
+    "Подготовка и инженерия признаков...",
+    "Обучение/инференс моделей...",
+    "SHAP-объяснения и ранжирование...",
+    "Подготовка shortlist и аналитики...",
+  ];
+  let i = 0;
+  dom.loadingProgressTextEl.textContent = stages[i];
+  dom.loadingProgressEl.classList.add("active");
+  dom.loadingProgressEl.setAttribute("aria-hidden", "false");
+  if (progressTimer) clearInterval(progressTimer);
+  progressTimer = setInterval(() => {
+    i = (i + 1) % stages.length;
+    dom.loadingProgressTextEl.textContent = stages[i];
+  }, 1500);
+}
+
+function stopProgress() {
+  if (progressTimer) {
+    clearInterval(progressTimer);
+    progressTimer = null;
+  }
+  if (!dom.loadingProgressEl || !dom.loadingProgressTextEl) return;
+  dom.loadingProgressEl.classList.remove("active");
+  dom.loadingProgressEl.setAttribute("aria-hidden", "true");
+  dom.loadingProgressTextEl.textContent = "Подготовка...";
 }
 
 function buildQuery() {
   const params = new URLSearchParams();
-  if (shortlistInput.value.trim()) params.set("shortlist", shortlistInput.value.trim());
-  if (regionInput.value.trim()) params.set("region", regionInput.value.trim());
-  if (farmSizeInput.value.trim()) params.set("farm_size", farmSizeInput.value.trim());
-  if (subsidyTypeInput.value.trim()) params.set("subsidy_type", subsidyTypeInput.value.trim());
-  const query = params.toString();
-  return query ? `?${query}` : "";
+  if (dom.shortlistInput.value.trim()) params.set("shortlist", dom.shortlistInput.value.trim());
+  if (dom.regionInput.value.trim()) params.set("region", dom.regionInput.value.trim());
+  if (dom.farmSizeInput.value.trim()) params.set("farm_size", dom.farmSizeInput.value.trim());
+  if (dom.subsidyTypeInput.value.trim()) params.set("subsidy_type", dom.subsidyTypeInput.value.trim());
+  params.set("compact", "1");
+  const q = params.toString();
+  return q ? `?${q}` : "";
+}
+
+function buildFilterParams() {
+  const params = new URLSearchParams();
+  const region = state.selectedMapRegionRaw || dom.regionInput.value.trim();
+  if (region) params.set("region", region);
+  if (dom.farmSizeInput.value.trim()) params.set("farm_size", dom.farmSizeInput.value.trim());
+  if (dom.subsidyTypeInput.value.trim()) params.set("subsidy_type", dom.subsidyTypeInput.value.trim());
+  return params;
+}
+
+function renderFeatureImportance(features) {
+  dom.globalFactorsEl.innerHTML = "";
+  if (!features.length) {
+    dom.globalFactorsEl.textContent = "Нет данных.";
+    return;
+  }
+  features.slice(0, 14).forEach(f => {
+    const chip = document.createElement("div");
+    chip.className = "chip";
+    const val = typeof f.contribution === "number" ? f.contribution.toFixed(3) : f.contribution;
+    chip.textContent = `${f.feature}: ${val}`;
+    dom.globalFactorsEl.appendChild(chip);
+  });
+}
+
+async function loadRecordsPage(page = 1) {
+  const params = buildFilterParams();
+  params.set("page", String(page));
+  params.set("page_size", String(state.recordsPageSize));
+  const res = await getRecordsApi(params);
+  if (!res.ok) return;
+  const data = await res.json();
+  state.recordsPage = Number(data.page || page);
+  state.recordsTotal = Number(data.total || 0);
+  const tableMeta = renderRecordsTable({
+    headEl: dom.tableHead,
+    bodyEl: dom.tableBody,
+    records: data.records || [],
+    total: state.recordsTotal,
+    page: state.recordsPage,
+    pageSize: state.recordsPageSize,
+    onSelect: openRecordDrawer,
+    onDownloadPdf: downloadReportById,
+  });
+  if (!tableMeta) {
+    dom.recordsPageInfoEl.textContent = "Нет данных";
+    return;
+  }
+  dom.recordsPageInfoEl.textContent = `Страница ${tableMeta.page} из ${tableMeta.totalPages} · всего ${tableMeta.total}`;
+  dom.recordsPrevBtn.disabled = tableMeta.page <= 1;
+  dom.recordsNextBtn.disabled = tableMeta.page >= tableMeta.totalPages;
+}
+
+async function loadShortlist() {
+  const params = buildFilterParams();
+  params.set("n", String(dom.shortlistInput.value.trim() || 20));
+  const res = await getTopApi(params);
+  if (!res.ok) return;
+  const data = await res.json();
+  state.latestShortlist = data.records || state.latestShortlist;
+  renderShortlist({
+    el: dom.shortlistEl,
+    shortlist: state.latestShortlist,
+    onSelect: openRecordDrawer,
+    onDownloadPdf: downloadReportById,
+  });
+}
+
+function refreshMap() {
+  renderKazakhstanMap({
+    mapEl: dom.kzMapEl,
+    legendEl: dom.kzLegendEl,
+    statsEl: dom.kzRegionStatsEl,
+    activeRegionEl: dom.kzActiveRegionEl,
+    records: state.latestRecords,
+    fairness: state.lastFairness,
+    selectedRegionNorm: state.selectedMapRegion,
+    selectedRegionLabel: state.selectedMapRegionRaw,
+    onRegionClick: regionInfo => {
+      const next = state.selectedMapRegion === regionInfo.norm ? "" : regionInfo.norm;
+      state.selectedMapRegion = next;
+      state.selectedMapRegionRaw = next ? regionInfo.region : "";
+      refreshMap();
+      loadShortlist().catch(() => {});
+      loadRecordsPage(1).catch(() => {});
+    },
+  });
+}
+
+async function renderScenario() {
+  const res = await getScenarioApi();
+  if (!res.ok) return;
+  const data = await res.json();
+  dom.scenarioRoiEl.innerHTML = "";
+  const card = document.createElement("div");
+  card.className = "short-item";
+  card.innerHTML = `
+    <strong>Сценарий: финансирование топ-${data.selected_farms}</strong>
+    <span>Бюджет: <b style="color:var(--amber)">${Number(data.estimated_budget).toLocaleString("ru-RU")} ₸</b></span>
+    <span>Ожидаемый прирост продукции: <b style="color:var(--green)">+${data.expected_output_gain_pct}%</b></span>
+    <span>С учётом рисков: <b style="color:var(--teal)">+${data.expected_risk_adjusted_gain_pct}%</b></span>
+  `;
+  dom.scenarioRoiEl.appendChild(card);
+}
+
+function renderResult(data) {
+  state.lastResponse = data;
+  state.latestRecords = data.records || [];
+  state.latestShortlist = data.shortlist || [];
+  state.lastFairness = data.fairness || null;
+
+  const source = state.latestRecords.length ? state.latestRecords : state.latestShortlist;
+  renderSummary({ el: dom.summaryEl, meta: data.meta, sourceRecords: source });
+  renderRankingMetrics({ el: dom.rankingMetricsEl, metrics: data.meta?.ranking_metrics || {} });
+  renderFeatureImportance(data.feature_importance || []);
+  renderColumns({ usedEl: dom.usedColumnsEl, excludedEl: dom.excludedColumnsEl, response: data });
+  renderShortlist({
+    el: dom.shortlistEl,
+    shortlist: state.latestShortlist,
+    onSelect: openRecordDrawer,
+    onDownloadPdf: downloadReportById,
+  });
+  renderFairness({ el: dom.fairnessEl, fairness: data.fairness });
+  refreshMap();
+  loadRecordsPage(1).catch(() => {});
+
+  renderBarChart(
+    dom.rankingCanvas,
+    (data.shortlist || []).slice(0, 10).map(r => `#${r.rank}`),
+    (data.shortlist || []).slice(0, 10).map(r => r.score),
+    "var(--teal)",
+  );
+  renderBarChart(
+    dom.distributionCanvas,
+    (data.score_distribution?.bins || []).map(x => Math.round(x)),
+    data.score_distribution?.counts || [],
+    "var(--blue)",
+  );
+  dom.systemExplanationEl.textContent = data.meta?.system_explanation || "";
+  renderScenario().catch(() => {});
 }
 
 async function submitScore(useSample = false) {
   document.body.classList.add("loading");
-  runButton.disabled = true;
-  useSampleButton.disabled = true;
-  setStatus("Запускаем анализ данных и ML-скоринг...");
-  const query = buildQuery();
-  const options = { method: "POST" };
+  dom.runButton.disabled = true;
+  dom.useSampleButton.disabled = true;
+  setStatus("Запускаем ML-скоринг (Stacking Ensemble + SHAP)...");
+  startProgress();
+  state.selectedMapRegion = "";
+  state.selectedMapRegionRaw = "";
 
   try {
-    if (!useSample && fileInput.files.length > 0) {
-      const formData = new FormData();
-      formData.append("file", fileInput.files[0]);
-      options.body = formData;
-    }
-
-    const response = await fetch(`/score${query}`, options);
-    const data = await response.json();
-    if (!response.ok) {
-      const message = data && (data.detail || data.error) ? (data.detail || data.error) : "Ошибка скоринга";
-      setStatus(message, "error");
+    const { res, data } = await scoreApi({
+      query: buildQuery(),
+      file: !useSample && dom.fileInput.files.length > 0 ? dom.fileInput.files[0] : null,
+    });
+    if (!res.ok) {
+      setStatus(data.detail || "Ошибка скоринга", "error");
       return;
     }
     renderResult(data);
-    setStatus(`Готово. Модель: ${data.meta.selected_model}. Shortlist сформирован.`);
+    setStatus(`✓ Готово. Модель: ${data.meta.selected_model} | Строк: ${data.meta.rows}`, "success");
+  } catch (err) {
+    setStatus(`Ошибка: ${err.message}`, "error");
   } finally {
+    stopProgress();
     document.body.classList.remove("loading");
-    runButton.disabled = false;
-    useSampleButton.disabled = false;
+    dom.runButton.disabled = false;
+    dom.useSampleButton.disabled = false;
   }
 }
 
-function renderResult(data) {
-  latestRecords = data.records || [];
-  renderSummary(data.meta);
-  renderFeatureImportance(data.feature_importance || []);
-  renderColumns(data);
-  renderShortlist(data.shortlist || []);
-  renderFairness(data.fairness);
-  renderTable(latestRecords);
-  renderRankingChart(data.shortlist || []);
-  renderDistributionChart(data.score_distribution || {});
-  systemExplanationEl.textContent = data.meta && data.meta.system_explanation
-    ? data.meta.system_explanation
-    : "Системная логика недоступна.";
-}
-
-function renderSummary(meta) {
-  summaryEl.innerHTML = "";
-  if (!meta) return;
-  const items = [
-    { label: "Заявителей", value: meta.rows },
-    { label: "Исходных полей", value: meta.source_columns },
-    { label: "Инженерных признаков", value: meta.engineered_features },
-    { label: "Режим", value: meta.mode },
-    { label: "Лучшая модель", value: meta.selected_model },
-    { label: "Минимум", value: meta.score_min.toFixed(2) },
-    { label: "Среднее", value: meta.score_mean.toFixed(2) },
-    { label: "Максимум", value: meta.score_max.toFixed(2) },
-    { label: "Compliance High", value: meta.compliance_summary?.high ?? 0 },
-    { label: "Compliance Medium", value: meta.compliance_summary?.medium ?? 0 },
-  ];
-  items.forEach((item) => {
-    const card = document.createElement("div");
-    card.className = "summary-card";
-    card.innerHTML = `<span>${item.label}</span><strong>${item.value}</strong>`;
-    summaryEl.appendChild(card);
-  });
-}
-
-function renderFeatureImportance(features) {
-  globalFactorsEl.innerHTML = "";
-  if (!features.length) {
-    globalFactorsEl.textContent = "Данные о важности признаков недоступны.";
-    return;
+async function loadDecisionAndAudit(applicationId) {
+  dom.auditLogEl.innerHTML = "";
+  const [dRes, aRes] = await Promise.all([getDecisionApi(applicationId), getAuditApi(applicationId)]);
+  if (dRes.ok) {
+    const d = await dRes.json();
+    if (d?.decision) {
+      dom.decisionInput.value = d.decision.decision || "APPROVE";
+      dom.reasonCodeInput.value = d.decision.reason_code || "";
+      dom.decisionCommentInput.value = d.decision.comment || "";
+      dom.decidedByInput.value = d.decision.decided_by || dom.decidedByInput.value;
+      dom.decisionStatusEl.textContent = `Сохранено: ${d.decision.decision} (${d.decision.reason_code || "—"})`;
+    }
   }
-  features.slice(0, 12).forEach((factor) => {
-    const chip = document.createElement("div");
-    chip.className = "chip";
-    chip.textContent = `${factor.feature}: ${factor.contribution.toFixed(3)}`;
-    globalFactorsEl.appendChild(chip);
-  });
-}
-
-function renderColumns(data) {
-  usedColumnsEl.innerHTML = "";
-  excludedColumnsEl.innerHTML = "";
-
-  const records = data.records || [];
-  const firstAttributes = records.length > 0 ? records[0].attributes || {} : {};
-  const usedColumns = BUSINESS_COLUMNS.filter((column) => column in firstAttributes);
-  const excludedColumns = (data.meta && data.meta.excluded_columns) || [];
-
-  if (usedColumns.length === 0) {
-    usedColumnsEl.textContent = "Нет данных по используемым полям.";
-  } else {
-    usedColumns.forEach((column) => {
-      const chip = document.createElement("div");
-      chip.className = "chip";
-      chip.textContent = column;
-      usedColumnsEl.appendChild(chip);
-    });
-  }
-
-  if (excludedColumns.length === 0) {
-    excludedColumnsEl.textContent = "Нет исключённых полей.";
-  } else {
-    excludedColumns.forEach((column) => {
-      const chip = document.createElement("div");
-      chip.className = "chip";
-      chip.textContent = column;
-      excludedColumnsEl.appendChild(chip);
+  if (aRes.ok) {
+    const a = await aRes.json();
+    const entries = a.entries || [];
+    dom.auditLogEl.innerHTML = "";
+    if (!entries.length) {
+      dom.auditLogEl.textContent = "Событий пока нет.";
+      return;
+    }
+    entries.forEach(e => {
+      const item = document.createElement("div");
+      item.className = "short-item";
+      item.innerHTML = `<strong>${e.action}</strong><span>${e.at}</span><span>actor = ${e.actor}</span>`;
+      dom.auditLogEl.appendChild(item);
     });
   }
 }
 
-function renderShortlist(shortlist) {
-  shortlistEl.innerHTML = "";
-  if (!shortlist.length) {
-    shortlistEl.textContent = "Shortlist пуст.";
-    return;
-  }
-  shortlist.forEach((item) => {
-    const wrap = document.createElement("div");
-    wrap.className = "short-item";
-    const attrs = item.attributes || {};
-    const pos = (item.explanation?.positive || []).slice(0, 2).join(", ");
-    const neg = (item.explanation?.negative || []).slice(0, 2).join(", ");
-    const failedRules = (item.compliance_flags || []).filter((f) => !f.passed);
-    wrap.innerHTML = `
-      <strong>Rank #${item.rank} | ID: ${item.id}</strong>
-      <span>Score: ${item.score.toFixed(2)}</span>
-      <span>Регион: ${attrs["Область"] || "—"}</span>
-      <span>Сумма: ${attrs["Причитающая сумма"] || "—"}</span>
-      <span>Позитив: ${pos || "—"}</span>
-      <span>Риски: ${neg || "—"}</span>
-      <span>Rule flags: ${failedRules.map((f) => `${f.code}(${f.severity})`).join(", ") || "нет"}</span>
-    `;
-    shortlistEl.appendChild(wrap);
+function openRecordDrawer(record) {
+  state.selectedRecord = record;
+  renderRecordExplanation({ explanationEl: dom.explanationEl, record, currentLang: state.currentLang });
+  dom.drawer.classList.add("open");
+  dom.drawer.setAttribute("aria-hidden", "false");
+  dom.decisionStatusEl.textContent = "Решение пока не сохранено.";
+  loadDecisionAndAudit(record.id).catch(() => {
+    dom.auditLogEl.textContent = "Не удалось загрузить аудит.";
   });
 }
 
-function renderFairness(fairness) {
-  fairnessEl.innerHTML = "";
-  if (!fairness || !fairness.groups || !fairness.groups.length) {
-    fairnessEl.textContent = "Недостаточно данных для fairness-оценки.";
+async function saveCommissionDecision() {
+  if (!state.selectedRecord) {
+    dom.decisionStatusEl.textContent = "Выберите заявителя.";
     return;
   }
-  const gap = document.createElement("div");
-  gap.className = "short-item";
-  gap.innerHTML = `<strong>Mean score gap: ${fairness.mean_score_gap.toFixed(2)}</strong><span>Атрибут: ${fairness.protected_attribute}</span>`;
-  fairnessEl.appendChild(gap);
-  fairness.groups.slice(0, 6).forEach((g) => {
-    const item = document.createElement("div");
-    item.className = "short-item";
-    item.innerHTML = `<strong>${g.group}</strong><span>count=${g.count}</span><span>mean=${g.mean_score.toFixed(2)}</span>`;
-    fairnessEl.appendChild(item);
-  });
+  const payload = {
+    application_id: state.selectedRecord.id,
+    decision: dom.decisionInput.value,
+    reason_code: dom.reasonCodeInput.value.trim() || "UNSPECIFIED",
+    comment: dom.decisionCommentInput.value.trim() || null,
+    decided_by: dom.decidedByInput.value.trim() || "commission_user",
+  };
+  const res = await saveDecisionApi(payload);
+  if (!res.ok) {
+    dom.decisionStatusEl.textContent = "Ошибка сохранения.";
+    return;
+  }
+  dom.decisionStatusEl.textContent = `✓ Решение сохранено: ${payload.decision}`;
+  loadDecisionAndAudit(state.selectedRecord.id).catch(() => {});
 }
 
-function renderTable(records) {
-  tableHead.innerHTML = "";
-  tableBody.innerHTML = "";
-  if (!records.length) return;
+function downloadReport() {
+  if (!state.selectedRecord) {
+    dom.decisionStatusEl.textContent = "Выберите заявителя.";
+    return;
+  }
+  window.open(`/api/reports/${encodeURIComponent(state.selectedRecord.id)}.pdf?lang=${state.currentLang}`, "_blank");
+}
 
-  const attributeKeys = Object.keys(records[0].attributes || {});
-  const visibleAttributes = BUSINESS_COLUMNS.filter((column) => attributeKeys.includes(column));
-  const columns = ["rank", "id", "score"].concat(visibleAttributes);
+function downloadReportById(applicationId) {
+  window.open(`/api/reports/${encodeURIComponent(applicationId)}.pdf?lang=${state.currentLang}`, "_blank");
+}
 
-  const headRow = document.createElement("tr");
-  columns.forEach((col) => {
-    const th = document.createElement("th");
-    th.textContent = col;
-    headRow.appendChild(th);
+function bindEvents() {
+  dom.form.addEventListener("submit", e => {
+    e.preventDefault();
+    submitScore(false);
   });
-  tableHead.appendChild(headRow);
-
-  records.forEach((record) => {
-    const tr = document.createElement("tr");
-    tr.addEventListener("click", () => renderRecordExplanation(record));
-    columns.forEach((col) => {
-      const td = document.createElement("td");
-      if (col === "rank") td.textContent = record.rank;
-      else if (col === "id") td.textContent = record.id;
-      else if (col === "score") td.textContent = record.score.toFixed(2);
-      else td.textContent = record.attributes && record.attributes[col] != null ? record.attributes[col] : "";
-      tr.appendChild(td);
+  dom.useSampleButton.addEventListener("click", () => submitScore(true));
+  dom.drawerClose.addEventListener("click", () => {
+    dom.drawer.classList.remove("open");
+    dom.drawer.setAttribute("aria-hidden", "true");
+  });
+  dom.drawerBackdrop.addEventListener("click", () => {
+    dom.drawer.classList.remove("open");
+    dom.drawer.setAttribute("aria-hidden", "true");
+  });
+  dom.saveDecisionBtn.addEventListener("click", () => {
+    saveCommissionDecision().catch(err => {
+      dom.decisionStatusEl.textContent = `Ошибка: ${err.message}`;
     });
-    tableBody.appendChild(tr);
+  });
+  dom.downloadReportBtn.addEventListener("click", downloadReport);
+  dom.kzMapResetBtn?.addEventListener("click", () => {
+    state.selectedMapRegion = "";
+    state.selectedMapRegionRaw = "";
+    refreshMap();
+    loadShortlist().catch(() => {});
+    loadRecordsPage(1).catch(() => {});
+  });
+  dom.recordsPrevBtn?.addEventListener("click", () => {
+    if (state.recordsPage > 1) loadRecordsPage(state.recordsPage - 1).catch(() => {});
+  });
+  dom.recordsNextBtn?.addEventListener("click", () => {
+    const totalPages = Math.max(1, Math.ceil(state.recordsTotal / state.recordsPageSize));
+    if (state.recordsPage < totalPages) loadRecordsPage(state.recordsPage + 1).catch(() => {});
+  });
+  dom.recordsPageSizeEl?.addEventListener("change", () => {
+    state.recordsPageSize = Number(dom.recordsPageSizeEl.value || 50);
+    loadRecordsPage(1).catch(() => {});
+  });
+  dom.viewLinks.forEach(link => {
+    link.addEventListener("click", () => {
+      switchView({ screenViews: dom.screenViews, viewLinks: dom.viewLinks, view: link.dataset.viewLink || "overview" });
+    });
+  });
+  dom.langToggle.addEventListener("change", () => {
+    state.currentLang = dom.langToggle.value || "ru";
+    setStatus(state.currentLang === "kz" ? "Тіл ауысты: Қазақша" : "Язык переключён: Русский");
+  });
+  window.addEventListener("hashchange", () => {
+    switchView({ screenViews: dom.screenViews, viewLinks: dom.viewLinks, view: inferViewFromHash(window.location.hash) });
+  });
+  window.addEventListener("resize", () => {
+    if (!state.lastResponse) return;
+    renderBarChart(
+      dom.rankingCanvas,
+      (state.lastResponse.shortlist || []).slice(0, 10).map(r => `#${r.rank}`),
+      (state.lastResponse.shortlist || []).slice(0, 10).map(r => r.score),
+      "var(--teal)",
+    );
+    renderBarChart(
+      dom.distributionCanvas,
+      (state.lastResponse.score_distribution?.bins || []).map(x => Math.round(x)),
+      state.lastResponse.score_distribution?.counts || [],
+      "var(--blue)",
+    );
   });
 }
 
-function renderRecordExplanation(record) {
-  const top = (record.explanation?.top_features || [])
-    .map((f) => `${f.feature}: ${f.contribution.toFixed(2)}`)
-    .join("; ");
-  const failedRules = (record.compliance_flags || [])
-    .filter((f) => !f.passed)
-    .map((f) => `${f.code} [${f.severity}] - ${f.message}`)
-    .join(" | ");
-  explanationEl.innerHTML = `
-    <strong>Rank #${record.rank} | ID: ${record.id} | Score: ${record.score.toFixed(2)}</strong>
-    <span>Положительные факторы: ${(record.explanation?.positive || []).join(", ") || "—"}</span>
-    <span>Отрицательные факторы: ${(record.explanation?.negative || []).join(", ") || "—"}</span>
-    <span>Top features: ${top || "—"}</span>
-    <span>Compliance flags: ${failedRules || "Нарушений не выявлено"}</span>
-  `;
-  drawer.classList.add("open");
-  drawer.setAttribute("aria-hidden", "false");
+async function bootstrapLastState() {
+  const res = await getLastScoreApi(true);
+  if (!res.ok) return;
+  const data = await res.json();
+  renderResult(data);
+  setStatus(`Загружено сохранённое состояние: ${data.meta?.rows || 0} записей`, "success");
 }
 
-function drawBarChart(canvas, labels, values, color = "#b04a2f") {
-  canvas.width = canvas.clientWidth || 520;
-  const ctx = canvas.getContext("2d");
-  const width = canvas.width;
-  const height = canvas.height;
-  ctx.clearRect(0, 0, width, height);
-  if (!labels.length) return;
-
-  const pad = 24;
-  const chartW = width - pad * 2;
-  const chartH = height - pad * 2;
-  const barW = chartW / labels.length;
-  const max = Math.max(...values, 1);
-
-  ctx.fillStyle = "#99a7c7";
-  ctx.font = "11px Manrope";
-
-  values.forEach((v, i) => {
-    const h = (v / max) * (chartH - 20);
-    const x = pad + i * barW + 4;
-    const y = pad + chartH - h;
-    ctx.fillStyle = color;
-    ctx.fillRect(x, y, Math.max(barW - 8, 6), h);
-    ctx.fillStyle = "#99a7c7";
-    ctx.fillText(labels[i], x, pad + chartH + 12);
-  });
-}
-
-function renderRankingChart(shortlist) {
-  const labels = shortlist.slice(0, 10).map((r) => `#${r.rank}`);
-  const values = shortlist.slice(0, 10).map((r) => r.score);
-  drawBarChart(rankingCanvas, labels, values, "#2f5e4a");
-}
-
-function renderDistributionChart(distribution) {
-  const labels = (distribution.bins || []).map((x) => `${Math.round(x)}`);
-  const values = distribution.counts || [];
-  drawBarChart(distributionCanvas, labels, values, "#b04a2f");
-}
-
-form.addEventListener("submit", (event) => {
-  event.preventDefault();
-  submitScore(false).catch((err) => setStatus(`Ошибка: ${err.message}`, "error"));
-});
-
-useSampleButton.addEventListener("click", () => {
-  submitScore(true).catch((err) => setStatus(`Ошибка: ${err.message}`, "error"));
-});
-
-drawerClose.addEventListener("click", () => {
-  drawer.classList.remove("open");
-  drawer.setAttribute("aria-hidden", "true");
-});
-
-drawerBackdrop.addEventListener("click", () => {
-  drawer.classList.remove("open");
-  drawer.setAttribute("aria-hidden", "true");
-});
+state.recordsPageSize = Number(dom.recordsPageSizeEl?.value || 50);
+switchView({ screenViews: dom.screenViews, viewLinks: dom.viewLinks, view: inferViewFromHash(window.location.hash) });
+bindEvents();
+bootstrapLastState().catch(() => {});

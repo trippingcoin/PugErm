@@ -1,208 +1,176 @@
-# AI-система скоринга субсидий (Кейс 2)
+# AgriScore KZ
 
-Премиальный прототип GovTech-платформы для оценки заявителей на сельскохозяйственные субсидии с использованием explainable AI.
+GovTech AI-прототип для Decentrathon 5.0 (Case 2): explainable scoring сельхозпроизводителей для распределения субсидий.
 
-Решение разработано под Decentrathon 5.0, Кейс 2:
-- data-driven ранжирование заявителей;
-- объяснимый score для каждого кейса;
-- формирование shortlist для комиссии;
-- понятный интерфейс для нетехнических сотрудников госорганов.
+## Что важно сразу
 
-AI в системе выступает инструментом поддержки принятия решений и не заменяет комиссию.
-
-## Ключевые возможности
-
-- Приём данных из `.xlsx`, `.csv`, `.json`
-- Устойчивая предобработка: пропуски, смешанные типы, «грязные» Excel-выгрузки
-- Feature engineering:
-  - показатели продуктивности
-  - эффективность субсидирования
-  - прокси исторической надёжности
-  - прокси потенциала роста
-- Сравнение минимум 2 ML-моделей и выбор лучшей
-- Нормализованный итоговый score в диапазоне `0..100`
-- Explainability:
-  - глобальная важность признаков
-  - локальные positive/negative факторы (top-3) по каждому заявителю
-- Shortlist engine с фильтрами:
-  - регион
-  - размер хозяйства
-  - тип субсидии
-- Fairness-диагностика (распределение score + gap по регионам)
-- Compliance rule engine:
-  - флаги нормативных/процессных рисков по заявке
-  - сводка high/medium рисков для набора
+- Да, система **работает без внешних API** (live enrichment опциональный).
+- Фронт теперь модульный и stateful.
+- Большая таблица работает через серверную пагинацию.
+- Последний скоринг сохраняется и восстанавливается после рестарта.
 
 ## Архитектура
 
-Проект организован в масштабируемую структуру:
-
 ```text
 app/
-  api/        # слой роутов
-  data/       # загрузка и подготовка данных
-  models/     # обучение и выбор моделей
-  services/   # бизнес-логика оркестрации
-  utils/      # логирование и утилиты
-cmd/server/   # точка входа FastAPI
-ml/           # CLI-скоринг
-web/          # dark-theme дашборд
+  api/routes.py
+  data/
+    loader.py
+    features.py
+    live_enrichment.py        # NEW: live внешние данные по регионам (опционально)
+  models/trainer.py
+  services/
+    scoring_service.py        # NEW: persisted last score state
+    rules.py
+    reporting.py
+    decision_store.py
+  schemas.py
+cmd/server/main.py
+web/
+  app.js                      # thin orchestrator
+  js/
+    dom.js
+    state.js
+    constants.js
+    utils.js
+    router/viewRouter.js
+    services/api.js
+    components/
+      metrics.js
+      shortlist.js
+      recordsTable.js
+      fairness.js
+      columns.js
+      mapKazakhstan.js
+      drawer.js
+      charts.js
+  index.html
+  styles.css
+Data.xlsx
 ```
 
-Дополнительные документы:
-- `ARCHITECTURE.md`
-- `ARCHITECTURE_FULL.md`
-- `architecture.puml`
+## ML и скоринг
 
-## ML-пайплайн
+Основной supervised режим:
+- stacking ensemble (`XGBoost`, `LightGBM`, `CatBoost`, если доступны),
+- SHAP explainability,
+- fallback режимы при недоступности части backend’ов,
+- unsupervised fallback при отсутствии валидного target.
 
-1. Загрузка данных и автоопределение шапки
-2. Очистка пустых строк/колонок и нормализация типов
-3. Инженерия доменных признаков
-4. Формирование целевой переменной:
-   - явная target-колонка (если передана), либо
-   - proxy-target на основе статуса/сумм
-5. Сравнение моделей и выбор лучшей по метрике:
-   - классификация: `LogisticRegression` vs `HistGradientBoostingClassifier` (ROC-AUC)
-   - регрессия: `Ridge` vs `RandomForestRegressor` (MAE-based)
-6. Расчёт итогового score `0..100`
-7. Построение explainability + compliance-флагов
+Формула финального скора:
+
+```text
+FinalScore = 0.60*ML + 0.20*Compliance + 0.12*Growth + 0.08*FraudSafety
+```
 
 ## API
 
-### `GET /health`
-Проверка состояния сервиса.
+Базовый URL: `http://localhost:8080`
 
-### `POST /score`
-Основной endpoint скоринга.
+Служебные:
+- `GET /health`
+- `GET /api/diagnostics`
 
-Параметры query:
-- `shortlist` (int, по умолчанию `20`)
-- `target` (опционально: target-колонка)
-- `id` (опционально: id-колонка)
-- `region` (опционально: фильтр shortlist)
-- `farm_size` (`small|medium|large`)
-- `subsidy_type` (опционально: фильтр shortlist)
-
-Multipart:
-- `file` (опционально: `.xlsx/.csv/.json`)
-
-Для совместимости также доступны:
+Скоринг:
 - `POST /api/score`
-
-### `GET /top`
-Топ `n` записей последнего запуска (с фильтрацией).
-
-Также:
+  - query: `shortlist`, `target`, `id`, `region`, `farm_size`, `subsidy_type`, `compact`
+  - `compact=1` возвращает облегчённый ответ (без full `records`)
+- `GET /api/score/last?compact=1` — последний сохранённый скоринг
 - `GET /api/top`
-
-### `GET /feature-importance`
-Глобальная важность признаков последнего запуска.
-
-Также:
+- `GET /api/records?page=&page_size=&region=&farm_size=&subsidy_type=`
 - `GET /api/feature-importance`
+- `GET /api/scenario/simulate`
 
-## Формат результата по заявителю
+Комиссия и аудит:
+- `POST /api/decisions`
+- `GET /api/decisions/{application_id}`
+- `GET /api/audit/{application_id}`
 
-```json
-{
-  "id": "1300100258683.0",
-  "rank": 1,
-  "score": 93.42,
-  "explanation": {
-    "positive": ["+ Высокая эффективность субсидии (12.3)"],
-    "negative": ["- Низкий потенциал роста (-4.1)"],
-    "top_features": [
-      {"feature": "Subsidy Efficiency", "contribution": 12.3}
-    ]
-  },
-  "compliance_flags": [
-    {
-      "code": "DIRECTION_PROGRAM_CONSISTENCY",
-      "severity": "medium",
-      "message": "Направление субсидирования должно соответствовать типу программы.",
-      "passed": false
-    }
-  ],
-  "attributes": {}
-}
-```
+Отчёт:
+- `GET /api/reports/{application_id}.pdf?lang=ru|kz`
 
-## Локальный запуск
+## Stateful поведение
+
+- Результат последнего скоринга сохраняется в:
+  - `.runtime/state/last_score_response.json`
+- При старте сервиса состояние автоматически поднимается.
+
+## Frontend
+
+Ключевые вещи:
+- экранная навигация (overview / shortlist / records / analytics / geo),
+- серверная пагинация таблицы заявителей,
+- прогресс-бар на время скоринга,
+- PDF-кнопки:
+  - в drawer,
+  - в карточках shortlist,
+  - в строках большой таблицы,
+- карта Казахстана (SVG), фильтр по региону кликом.
+
+## Live enrichment (опционально)
+
+### По умолчанию
+
+Ничего настраивать не нужно. Система работает без внешних источников.
+
+### Если хотите дергать внешние endpoint’ы на каждый скоринг
+
+Настройте env переменные для источников (egov/stat/weather/market).  
+Тогда на каждом `POST /api/score` добавятся фичи:
+- `fe_ext_egov`
+- `fe_ext_statgov`
+- `fe_ext_weather`
+- `fe_ext_market`
+
+Пример для одного источника:
 
 ```bash
+export AGRISCORE_EGOV_REGION_STATS_URL="https://your-endpoint.example/api/stats"
+export AGRISCORE_EGOV_REGION_KEY="region"
+export AGRISCORE_EGOV_VALUE_KEY="value"
+# если endpoint принимает регион как query param:
+export AGRISCORE_EGOV_QUERY_REGION_PARAM="region"
+```
+
+Аналогичные группы переменных:
+- `AGRISCORE_STAT_*`
+- `AGRISCORE_WEATHER_*`
+- `AGRISCORE_MARKET_*`
+
+Поведение fail-safe:
+- если внешний API не отвечает/ошибка/таймаут, скоринг не падает.
+
+## Запуск
+
+```bash
+cd /Users/dauletermukhanov/Documents/PugErm
 python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt -r ml/requirements.txt
-python3 cmd/server/main.py
+.venv/bin/pip install -r requirements.txt
+MPLCONFIGDIR=.runtime/matplotlib .venv/bin/python cmd/server/main.py
 ```
 
 Открыть:
+- `http://localhost:8080`
 
-```text
-http://localhost:8080
-```
-
-## Запуск в Docker
-
-Сборка и запуск контейнера:
+## Быстрая проверка
 
 ```bash
-docker build -t subsidy-scoring .
-docker run --rm -p 8080:8080 subsidy-scoring
+curl http://localhost:8080/health
+curl http://localhost:8080/api/diagnostics
+curl "http://localhost:8080/api/score/last?compact=1"
 ```
 
-Запуск через Docker Compose:
+## Troubleshooting
+
+### LightGBM на macOS
+
+Если ошибка `libomp.dylib`:
 
 ```bash
-docker compose up --build
+brew install libomp
 ```
 
-Открыть:
+### Медленный скоринг
 
-```text
-http://localhost:8080
-```
-
-## Запуск через CLI
-
-```bash
-source .venv/bin/activate
-python3 ml/score.py --input Data.xlsx --shortlist 10
-```
-
-С фильтрами:
-
-```bash
-python3 ml/score.py \
-  --input "Выгрузка по выданным субсидиям 2025 год (обезлич).xlsx" \
-  --shortlist 20 \
-  --region "область Абай" \
-  --farm-size medium
-```
-
-## Demo flow для жюри
-
-1. Открыть дашборд и нажать `Использовать Data.xlsx`
-2. Показать в сводке выбранную лучшую модель и ключевые метрики
-3. Показать `Feature Importance` и `Системная логика`
-4. Показать shortlist с позитивными/негативными факторами
-5. Кликнуть строку таблицы и открыть drawer с детальным объяснением
-6. Показать fairness-блок и распределение score
-7. Применить фильтры (регион/размер/тип) и пересчитать shortlist
-8. Показать compliance-флаги в карточках и деталях заявителя
-
-## Ограничения
-
-- Текущий набор данных больше отражает поток заявок, чем полный жизненный цикл хозяйства
-- При отсутствии явных меток качества используются proxy-target подходы
-- Нет постоянной БД и полного audit trail (планируется на следующий этап)
-- Rule engine пока реализован как эвристический MVP и должен расширяться под полное нормативное покрытие
-
-## Почему решение конкурентное
-
-- Практическая ценность для госорганов (качество распределения бюджета)
-- Реальная ML-логика с выбором моделей, а не статические правила
-- Explainability на глобальном и локальном уровне
-- End-to-end прототип (данные -> score -> shortlist -> explainability -> UI)
-- Премиальный dark-theme UX для демонстрации жюри
+Это ожидаемо на больших данных: stacking + CV + SHAP + rules/fairness.  
+Для демо используйте `compact=1` и серверную пагинацию (уже включено во фронте).

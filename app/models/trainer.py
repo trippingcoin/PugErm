@@ -1,21 +1,46 @@
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+import shap
 from scipy import sparse
-from sklearn.base import BaseEstimator
 from sklearn.compose import ColumnTransformer
 from sklearn.decomposition import TruncatedSVD
-from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestRegressor
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression, Ridge
-from sklearn.metrics import make_scorer, mean_absolute_error
-from sklearn.model_selection import KFold, StratifiedKFold, cross_val_score
+from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import KFold, StratifiedKFold, cross_val_predict
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+_XGB_IMPORT_ERROR: Optional[str] = None
+_LGBM_IMPORT_ERROR: Optional[str] = None
+_CATBOOST_IMPORT_ERROR: Optional[str] = None
+
+try:
+    from xgboost import XGBClassifier, XGBRegressor
+except Exception as exc:
+    _XGB_IMPORT_ERROR = str(exc)
+    XGBClassifier = None
+    XGBRegressor = None
+
+try:
+    from lightgbm import LGBMClassifier, LGBMRegressor
+except Exception as exc:
+    _LGBM_IMPORT_ERROR = str(exc)
+    LGBMClassifier = None
+    LGBMRegressor = None
+
+try:
+    from catboost import CatBoostClassifier, CatBoostRegressor
+except Exception as exc:
+    _CATBOOST_IMPORT_ERROR = str(exc)
+    CatBoostClassifier = None
+    CatBoostRegressor = None
 
 
 @dataclass
@@ -27,6 +52,24 @@ class ModelTrainingOutput:
     local_contributions: np.ndarray
     feature_names: List[str]
     mode: str
+    shap_values: Optional[np.ndarray] = None
+
+
+def get_ml_backend_status() -> Dict[str, Dict[str, Optional[str]]]:
+    return {
+        "xgboost": {
+            "available": XGBClassifier is not None and XGBRegressor is not None,
+            "error": _XGB_IMPORT_ERROR,
+        },
+        "lightgbm": {
+            "available": LGBMClassifier is not None and LGBMRegressor is not None,
+            "error": _LGBM_IMPORT_ERROR,
+        },
+        "catboost": {
+            "available": CatBoostClassifier is not None and CatBoostRegressor is not None,
+            "error": _CATBOOST_IMPORT_ERROR,
+        },
+    }
 
 
 def _normalize_0_100(values: np.ndarray) -> np.ndarray:
@@ -74,138 +117,211 @@ def _feature_names(preprocessor: ColumnTransformer, numeric_cols: List[str], cat
     return out
 
 
-def _safe_auc_cv(model: BaseEstimator, x: pd.DataFrame, y: pd.Series) -> float:
-    y_int = y.astype(int)
-    if y_int.nunique() < 2:
-        return 0.0
-    splits = min(5, max(2, int(y_int.value_counts().min())))
-    cv = StratifiedKFold(n_splits=splits, shuffle=True, random_state=42)
-    scores = cross_val_score(model, x, y_int, cv=cv, scoring="roc_auc")
-    return float(np.mean(scores))
+def _to_dense(x_matrix) -> np.ndarray:
+    return x_matrix.toarray() if sparse.issparse(x_matrix) else np.asarray(x_matrix)
 
 
-def _safe_mae_cv(model: BaseEstimator, x: pd.DataFrame, y: pd.Series) -> float:
-    if y.nunique() < 2:
-        return 0.0
-    cv = KFold(n_splits=min(5, max(2, len(y) // 1000 + 2)), shuffle=True, random_state=42)
-    scorer = make_scorer(mean_absolute_error, greater_is_better=False)
-    scores = cross_val_score(model, x, y, cv=cv, scoring=scorer)
-    return float(np.mean(scores))
+def _rank_corr(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    a = pd.Series(y_true).rank(pct=True).values
+    b = pd.Series(y_pred).rank(pct=True).values
+    corr = np.corrcoef(a, b)[0, 1]
+    return 0.0 if np.isnan(corr) else float(corr)
 
 
-def _predict_raw(model: Pipeline, x: pd.DataFrame, problem_type: str) -> np.ndarray:
-    if problem_type == "classification":
-        if hasattr(model, "predict_proba"):
-            return model.predict_proba(x)[:, 1]
-        return model.decision_function(x)
-    if problem_type == "regression":
-        return model.predict(x)
-    raise ValueError(f"Unsupported problem type: {problem_type}")
-
-
-def _sparse_row_contrib(x_matrix, coef: np.ndarray, top_k: int = 3) -> np.ndarray:
-    if sparse.issparse(x_matrix):
-        contrib = x_matrix.multiply(coef)
-        return contrib.toarray()
-    return np.asarray(x_matrix) * coef
-
-
-def _fit_surrogate(preprocessor: ColumnTransformer, x: pd.DataFrame, raw_scores: np.ndarray) -> Tuple[np.ndarray, List[str], List[Tuple[str, float]]]:
-    x_enc = preprocessor.transform(x)
-    feature_names = _feature_names(
-        preprocessor,
-        preprocessor.transformers_[0][2],  # numeric columns
-        preprocessor.transformers_[1][2],  # categorical columns
-    )
-
-    surrogate = Ridge(alpha=10.0, random_state=42)
-    surrogate.fit(x_enc, raw_scores)
-    coef = surrogate.coef_
-    local_contributions = _sparse_row_contrib(x_enc, coef)
-    denom = float(np.sum(np.abs(coef)) + 1e-9)
+def _fit_shap_explainer(xgb_model, x_dense: np.ndarray, feature_names: List[str]):
+    """Returns (shap_values, feature_importance) using TreeExplainer."""
+    explainer = shap.TreeExplainer(xgb_model)
+    shap_values = explainer.shap_values(x_dense)
+    mean_abs_shap = np.abs(shap_values).mean(axis=0)
     importance = sorted(
-        [(feature_names[i], float(coef[i] / denom * 100.0)) for i in range(len(feature_names))],
-        key=lambda x: abs(x[1]),
+        [(feature_names[i], float(mean_abs_shap[i])) for i in range(len(feature_names))],
+        key=lambda t: abs(t[1]),
         reverse=True,
     )
-    return local_contributions, feature_names, importance
+    return shap_values, importance
 
 
-def train_scoring_model(x: pd.DataFrame, y: Optional[pd.Series], mode: str) -> ModelTrainingOutput:
+def _build_classifier_candidates() -> Dict[str, object]:
+    models: Dict[str, object] = {}
+    if XGBClassifier is not None:
+        models["xgb"] = XGBClassifier(
+            n_estimators=500,
+            max_depth=6,
+            learning_rate=0.05,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=42,
+            n_jobs=-1,
+            verbosity=0,
+        )
+    if LGBMClassifier is not None:
+        models["lgbm"] = LGBMClassifier(
+            n_estimators=500,
+            num_leaves=63,
+            learning_rate=0.05,
+            min_child_samples=20,
+            reg_alpha=0.1,
+            random_state=42,
+            n_jobs=-1,
+            verbose=-1,
+        )
+    if CatBoostClassifier is not None:
+        models["catboost"] = CatBoostClassifier(
+            iterations=400,
+            depth=8,
+            l2_leaf_reg=5,
+            learning_rate=0.05,
+            random_seed=42,
+            verbose=0,
+        )
+    return models
+
+
+def _build_regressor_candidates() -> Dict[str, object]:
+    models: Dict[str, object] = {}
+    if XGBRegressor is not None:
+        models["xgb"] = XGBRegressor(
+            n_estimators=500,
+            max_depth=6,
+            learning_rate=0.05,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=42,
+            n_jobs=-1,
+            verbosity=0,
+        )
+    if LGBMRegressor is not None:
+        models["lgbm"] = LGBMRegressor(
+            n_estimators=500,
+            num_leaves=63,
+            learning_rate=0.05,
+            min_child_samples=20,
+            reg_alpha=0.1,
+            random_state=42,
+            n_jobs=-1,
+            verbose=-1,
+        )
+    if CatBoostRegressor is not None:
+        models["catboost"] = CatBoostRegressor(
+            iterations=400,
+            depth=8,
+            l2_leaf_reg=5,
+            learning_rate=0.05,
+            random_seed=42,
+            verbose=0,
+        )
+    return models
+
+
+def train_scoring_model(x: pd.DataFrame, y: Optional[pd.Series]) -> ModelTrainingOutput:
     preprocessor, numeric_cols, categorical_cols = _build_preprocessor(x)
-    n_components = min(64, max(2, len(numeric_cols) + len(categorical_cols)))
 
     if y is not None and y.notna().sum() >= 30:
         y_clean = y.dropna()
         x_clean = x.loc[y_clean.index]
         unique_count = y_clean.nunique()
 
+        prep_fitted = preprocessor.fit(x_clean)
+        feature_names = _feature_names(prep_fitted, numeric_cols, categorical_cols)
+
+        x_clean_enc = prep_fitted.transform(x_clean)
+        x_clean_dense = _to_dense(x_clean_enc)
+        x_full_enc = prep_fitted.transform(x)
+        x_full_dense = _to_dense(x_full_enc)
+
         if unique_count <= 10 and set(y_clean.unique()).issubset({0, 1, 0.0, 1.0}):
-            problem_type = "classification"
-            model_candidates: Dict[str, Pipeline] = {
-                "logistic_regression": Pipeline(
-                    steps=[
-                        ("prep", preprocessor),
-                        ("model", LogisticRegression(max_iter=3000, class_weight="balanced")),
-                    ]
-                ),
-                "hgb_classifier": Pipeline(
-                    steps=[
-                        ("prep", preprocessor),
-                        ("svd", TruncatedSVD(n_components=n_components, random_state=42)),
-                        ("model", HistGradientBoostingClassifier(random_state=42)),
-                    ]
-                ),
-            }
-            comparison = {name: _safe_auc_cv(model, x_clean, y_clean) for name, model in model_candidates.items()}
-            selected_name = max(comparison, key=comparison.get)
-            selected = model_candidates[selected_name]
-            selected.fit(x_clean, y_clean.astype(int))
-            raw_scores = _predict_raw(selected, x, problem_type)
-            selected_mode = "supervised_classification"
+            y_bin = y_clean.astype(int).values
+
+            base_models = _build_classifier_candidates()
+            if not base_models:
+                raise RuntimeError("No supervised classifier backends are available.")
+
+            skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+            oof_preds: Dict[str, np.ndarray] = {}
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message="X does not have valid feature names, but LGBMClassifier was fitted with feature names",
+                    category=UserWarning,
+                )
+                for name, model in base_models.items():
+                    pred = cross_val_predict(model, x_clean_dense, y_bin, cv=skf, method="predict_proba")
+                    oof_preds[name] = pred[:, 1]
+
+            meta_features = np.column_stack(list(oof_preds.values()))
+            meta_model = LogisticRegression(max_iter=2000)
+            meta_model.fit(meta_features, y_bin)
+
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message="X does not have valid feature names, but LGBMClassifier was fitted with feature names",
+                    category=UserWarning,
+                )
+                for model in base_models.values():
+                    model.fit(x_clean_dense, y_bin)
+
+                base_preds_full = np.column_stack([m.predict_proba(x_full_dense)[:, 1] for m in base_models.values()])
+            raw_scores = meta_model.predict_proba(base_preds_full)[:, 1]
+
+            stack_train_pred = meta_model.predict_proba(meta_features)[:, 1]
+            comparison = {name: float(roc_auc_score(y_bin, pred)) for name, pred in oof_preds.items()}
+            comparison["stacking"] = float(roc_auc_score(y_bin, stack_train_pred))
+
+            if "xgb" in base_models:
+                shap_values, importance = _fit_shap_explainer(base_models["xgb"], x_full_dense, feature_names)
+            else:
+                shap_values = np.zeros((x_full_dense.shape[0], x_full_dense.shape[1]), dtype=float)
+                importance = [(name, float(score)) for name, score in comparison.items() if name != "stacking"]
+            selected_name = "stacking_" + "_".join(base_models.keys())
+            selected_mode = "supervised_stacking_ensemble"
+            local_contrib = np.asarray(shap_values)
         else:
-            problem_type = "regression"
-            model_candidates = {
-                "ridge_regression": Pipeline(
-                    steps=[
-                        ("prep", preprocessor),
-                        ("model", Ridge(alpha=1.0, random_state=42)),
-                    ]
-                ),
-                "random_forest_regression": Pipeline(
-                    steps=[
-                        ("prep", preprocessor),
-                        ("svd", TruncatedSVD(n_components=n_components, random_state=42)),
-                        ("model", RandomForestRegressor(n_estimators=300, random_state=42, n_jobs=-1)),
-                    ]
-                ),
-            }
-            # Higher is better because scorer returns negative MAE.
-            comparison = {name: _safe_mae_cv(model, x_clean, y_clean) for name, model in model_candidates.items()}
-            selected_name = max(comparison, key=comparison.get)
-            selected = model_candidates[selected_name]
-            selected.fit(x_clean, y_clean)
-            raw_scores = _predict_raw(selected, x, problem_type)
-            selected_mode = "supervised_regression"
-    else:
-        comparison = {}
-        selected_name = "unsupervised_svd"
-        selected_mode = "unsupervised"
-        prep = preprocessor.fit(x)
-        x_enc = prep.transform(x)
-        if sparse.issparse(x_enc):
-            x_enc = x_enc.asfptype()
-        svd = TruncatedSVD(n_components=1, random_state=42)
-        raw_scores = svd.fit_transform(x_enc).reshape(-1)
-        # Build feature importance from projection.
-        feature_names = _feature_names(prep, numeric_cols, categorical_cols)
-        comp = svd.components_[0]
-        importance = sorted(
-            [(feature_names[i], float(comp[i])) for i in range(len(feature_names))],
-            key=lambda t: abs(t[1]),
-            reverse=True,
-        )
-        local_contrib = _sparse_row_contrib(x_enc, comp)
+            y_reg = y_clean.astype(float).values
+            base_models = _build_regressor_candidates()
+            if not base_models:
+                raise RuntimeError("No supervised regressor backends are available.")
+
+            kf = KFold(n_splits=5, shuffle=True, random_state=42)
+            oof_preds: Dict[str, np.ndarray] = {}
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message="X does not have valid feature names, but LGBMRegressor was fitted with feature names",
+                    category=UserWarning,
+                )
+                for name, model in base_models.items():
+                    oof_preds[name] = cross_val_predict(model, x_clean_dense, y_reg, cv=kf)
+
+            meta_features = np.column_stack(list(oof_preds.values()))
+            meta_model = Ridge(alpha=1.0)
+            meta_model.fit(meta_features, y_reg)
+
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message="X does not have valid feature names, but LGBMRegressor was fitted with feature names",
+                    category=UserWarning,
+                )
+                for model in base_models.values():
+                    model.fit(x_clean_dense, y_reg)
+
+                base_preds_full = np.column_stack([m.predict(x_full_dense) for m in base_models.values()])
+            raw_scores = meta_model.predict(base_preds_full)
+
+            stacked_train = meta_model.predict(meta_features)
+            comparison = {name: _rank_corr(y_reg, pred) for name, pred in oof_preds.items()}
+            comparison["stacking"] = _rank_corr(y_reg, stacked_train)
+
+            if "xgb" in base_models:
+                shap_values, importance = _fit_shap_explainer(base_models["xgb"], x_full_dense, feature_names)
+            else:
+                shap_values = np.zeros((x_full_dense.shape[0], x_full_dense.shape[1]), dtype=float)
+                importance = [(name, float(score)) for name, score in comparison.items() if name != "stacking"]
+            selected_name = "stacking_" + "_".join(base_models.keys())
+            selected_mode = "supervised_stacking_ensemble"
+            local_contrib = np.asarray(shap_values)
+
         scores = _normalize_0_100(raw_scores)
         return ModelTrainingOutput(
             score_values=scores,
@@ -215,12 +331,27 @@ def train_scoring_model(x: pd.DataFrame, y: Optional[pd.Series], mode: str) -> M
             local_contributions=local_contrib,
             feature_names=feature_names,
             mode=selected_mode,
+            shap_values=np.asarray(shap_values),
         )
 
+    comparison: Dict[str, float] = {}
+    selected_name = "unsupervised_svd"
+    selected_mode = "unsupervised"
+    prep = preprocessor.fit(x)
+    x_enc = prep.transform(x)
+    if sparse.issparse(x_enc):
+        x_enc = x_enc.asfptype()
+    svd = TruncatedSVD(n_components=1, random_state=42)
+    raw_scores = svd.fit_transform(x_enc).reshape(-1)
+    feature_names = _feature_names(prep, numeric_cols, categorical_cols)
+    comp = svd.components_[0]
+    importance = sorted(
+        [(feature_names[i], float(comp[i])) for i in range(len(feature_names))],
+        key=lambda t: abs(t[1]),
+        reverse=True,
+    )
+    local_contrib = x_enc.multiply(comp).toarray() if sparse.issparse(x_enc) else np.asarray(x_enc) * comp
     scores = _normalize_0_100(raw_scores)
-
-    prep_fitted = selected.named_steps["prep"]
-    local_contrib, feature_names, importance = _fit_surrogate(prep_fitted, x, raw_scores)
     return ModelTrainingOutput(
         score_values=scores,
         selected_model_name=selected_name,
@@ -229,4 +360,5 @@ def train_scoring_model(x: pd.DataFrame, y: Optional[pd.Series], mode: str) -> M
         local_contributions=local_contrib,
         feature_names=feature_names,
         mode=selected_mode,
+        shap_values=None,
     )

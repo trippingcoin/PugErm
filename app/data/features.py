@@ -6,6 +6,8 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from app.data.live_enrichment import fetch_live_region_enrichment
+
 
 STATUS_POSITIVE = {
     "исполнена",
@@ -20,6 +22,18 @@ STATUS_NEGATIVE = {
     "отозвано",
     "rejected",
     "declined",
+}
+
+STATUS_UTILITY = {
+    "исполнена": 100.0,
+    "одобрена": 85.0,
+    "сформировано поручение": 72.0,
+    "получена": 55.0,
+    "отклонена": 18.0,
+    "отозвано": 10.0,
+    "approved": 85.0,
+    "executed": 100.0,
+    "rejected": 18.0,
 }
 
 
@@ -65,6 +79,19 @@ def _infer_target(df: pd.DataFrame, target_column: Optional[str]) -> Tuple[Optio
             return y, target_column, "supervised"
 
     status_col = _find_column(df.columns.tolist(), ["статус", "status"])
+    if status_col:
+        status_low = _normalize_text_series(df[status_col])
+        status_utility = status_low.map(STATUS_UTILITY)
+        amount_col = _find_column(df.columns.tolist(), ["сумм", "amount", "subsid"])
+        if amount_col:
+            amount = pd.to_numeric(df[amount_col], errors="coerce")
+            amount_score = amount.rank(pct=True, method="average") * 100.0
+            utility = status_utility.fillna(45.0) * 0.7 + amount_score.fillna(50.0) * 0.3
+        else:
+            utility = status_utility
+        if utility.notna().sum() >= 20 and utility.nunique(dropna=True) > 10:
+            return utility.astype(float), status_col, "proxy_ranking_supervised"
+
     if status_col:
         y = _build_status_flag(df[status_col])
         if y.notna().sum() >= 20 and y.nunique(dropna=True) > 1:
@@ -116,7 +143,6 @@ def _engineer_common_features(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str,
     if status_col:
         out["fe_success_flag"] = _build_status_flag(out[status_col])
 
-    # Synthetic farm key for historical metrics when explicit farmer ID is missing.
     key_cols: List[str] = []
     for col in [region_col, district_col, akimat_col, subsidy_type_col]:
         if col:
@@ -149,6 +175,37 @@ def _engineer_common_features(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str,
             monthly["region_growth"] = monthly.groupby("region")["amount"].pct_change().replace([np.inf, -np.inf], np.nan)
             growth_map = monthly.groupby("region")["region_growth"].median().to_dict()
             out["fe_growth_potential"] = out[region_col].map(growth_map)
+
+    if normative_col:
+        norm_val = pd.to_numeric(out[normative_col], errors="coerce")
+        out["fe_has_normative"] = (norm_val > 0).astype(float)
+        out["fe_normative_per_unit"] = norm_val / (amount + 1e-9)
+    else:
+        out["fe_has_normative"] = 0.0
+
+    if date_col and amount_col:
+        dt_parsed = pd.to_datetime(out[date_col], errors="coerce", dayfirst=True)
+        out["fe_days_since_epoch"] = (dt_parsed - pd.Timestamp("2020-01-01")).dt.days.fillna(0)
+        out["fe_is_recent"] = (dt_parsed.dt.year >= 2023).astype(float)
+
+    if region_col and amount_col:
+        region_median = out.groupby(region_col)[amount_col].transform(
+            lambda x: pd.to_numeric(x, errors="coerce").median()
+        )
+        out["fe_amount_vs_region_median"] = amount / (region_median + 1e-9)
+
+        region_count = out.groupby(region_col)[region_col].transform("count")
+        out["fe_region_competition"] = region_count
+
+    out["fe_completeness_score"] = out.notna().sum(axis=1) / len(out.columns)
+
+    if region_col:
+        out["fe_region_norm"] = out[region_col].astype(str).str.strip().str.lower()
+        live = fetch_live_region_enrichment(out["fe_region_norm"].tolist())
+        if not live.empty:
+            out = out.merge(live, how="left", left_on="fe_region_norm", right_on="region_norm")
+            out = out.drop(columns=["region_norm"], errors="ignore")
+        out = out.drop(columns=["fe_region_norm"], errors="ignore")
 
     if amount_col:
         q = amount.quantile([0.33, 0.66]).values
@@ -202,7 +259,6 @@ def prepare_features(
             drop_columns.add(col)
             excluded.append(f"{col}: technical column")
 
-    # Avoid leakage if target is derived from status.
     if mode == "proxy_status_supervised":
         status_col = _find_column(cols, ["статус", "status"])
         if status_col:
@@ -231,7 +287,8 @@ def prepare_features(
 
     system_explanation = (
         "Model prioritizes productivity, subsidy efficiency, reliability history, and growth signals "
-        "while excluding technical identifiers and timestamps."
+        "while excluding technical identifiers and timestamps. "
+        "Regional context is enriched from live external APIs when configured."
     )
 
     return PreparedData(

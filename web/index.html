@@ -6,10 +6,7 @@
     <title>AI Gov Scoring Platform</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap"
-      rel="stylesheet"
-    />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -24,10 +21,11 @@
           </div>
         </div>
         <nav class="menu">
-          <a class="menu-item active" href="#overview">Обзор</a>
-          <a class="menu-item" href="#shortlist">Shortlist</a>
-          <a class="menu-item" href="#analytics">Аналитика</a>
-          <a class="menu-item" href="#records">Заявители</a>
+          <a class="menu-item active" href="#overview" data-view-link="overview">Обзор</a>
+          <a class="menu-item" href="#shortlist" data-view-link="shortlist">Shortlist</a>
+          <a class="menu-item" href="#records" data-view-link="records">Заявители</a>
+          <a class="menu-item" href="#analytics" data-view-link="analytics">Аналитика</a>
+          <a class="menu-item" href="#geo" data-view-link="geo">Карта</a>
         </nav>
         <div class="sidebar-foot">
           <p>AI помогает комиссии принимать решения, но не заменяет эксперта.</p>
@@ -41,9 +39,17 @@
             <h1>Скоринг заявок на субсидии</h1>
           </div>
           <div class="topbar-chip">Explainable AI · Live Scoring</div>
+          <label class="field" style="max-width: 160px">
+            <span>Language</span>
+            <select id="lang-toggle">
+              <option value="ru">RU</option>
+              <option value="kz">KZ</option>
+            </select>
+          </label>
         </header>
 
-        <section class="card control-card" id="overview">
+        <p class="eyebrow screen-view active" data-view="overview">Экран 1 · Главная страница</p>
+        <section class="card control-card screen-view active" id="overview" data-view="overview">
           <div class="card-head">
             <h2>Запуск анализа</h2>
             <p>Загрузите датасет или используйте демонстрационный файл.</p>
@@ -80,24 +86,33 @@
             </div>
           </form>
           <div class="status" id="status">Готово к запуску скоринга.</div>
+          <div id="loading-progress" class="loading-progress" aria-hidden="true">
+            <div class="loading-progress-bar"></div>
+            <div id="loading-progress-text" class="loading-progress-text">Подготовка...</div>
+          </div>
+          <div class="card-head" style="margin-top: 14px;">
+            <h3>Метрики запуска</h3>
+            <p>NDCG и Lift — главный аргумент против FCFS</p>
+          </div>
+          <div id="summary" class="summary"></div>
         </section>
 
-        <section class="grid grid-2">
-          <article class="card">
-            <div class="card-head">
-              <h3>Сводка</h3>
-            </div>
-            <div id="summary" class="summary"></div>
-          </article>
+        <p class="eyebrow screen-view" data-view="shortlist">Экран 2 · Shortlist</p>
+        <section class="card screen-view" id="shortlist-screen" data-view="shortlist">
+          <div class="card-head">
+            <h3>Топ кандидатов в рекомендации комиссии</h3>
+          </div>
+          <div id="shortlist" class="stack"></div>
+        </section>
+
+        <p class="eyebrow screen-view" data-view="records">Экран 3 · Таблица заявителей</p>
+        <section class="grid grid-2 screen-view" id="feature-section" data-view="records">
           <article class="card">
             <div class="card-head">
               <h3>Feature Importance</h3>
             </div>
             <div id="global-factors" class="chips"></div>
           </article>
-        </section>
-
-        <section class="grid grid-2" id="analytics">
           <article class="card">
             <div class="card-head">
               <h3>Системная логика</h3>
@@ -105,6 +120,16 @@
             <p id="system-explanation" class="body-text">
               Модель ранжирует заявки по продуктивности, стабильности и эффективности использования субсидий.
             </p>
+          </article>
+        </section>
+
+        <p class="eyebrow screen-view" data-view="analytics">Экран 5 · Аналитика и метрики</p>
+        <section class="grid grid-2 screen-view" id="analytics" data-view="analytics">
+          <article class="card">
+            <div class="card-head">
+              <h3>NDCG vs FCFS</h3>
+            </div>
+            <div id="ranking-metrics" class="summary"></div>
           </article>
           <article class="card">
             <div class="card-head">
@@ -114,7 +139,52 @@
           </article>
         </section>
 
-        <section class="grid grid-2">
+        <section class="grid grid-3 screen-view" id="metrics" data-view="analytics">
+          <article class="card">
+            <div class="card-head">
+              <h3>Score Distribution</h3>
+            </div>
+            <canvas id="distribution-chart" height="180"></canvas>
+          </article>
+          <article class="card">
+            <div class="card-head">
+              <h3>Top Ranking Chart</h3>
+            </div>
+            <canvas id="ranking-chart" height="180"></canvas>
+          </article>
+          <article class="card">
+            <div class="card-head">
+              <h3>ROI Scenario</h3>
+            </div>
+            <div id="scenario-roi" class="stack"></div>
+          </article>
+        </section>
+
+        <section class="grid grid-2 screen-view" id="geo" data-view="geo">
+          <article class="card">
+            <div class="card-head">
+              <h3>Карта Казахстана</h3>
+              <p>Средний скор по регионам. Клик по региону применяет локальный фильтр.</p>
+            </div>
+            <div class="map-wrap">
+              <div class="map-bg"></div>
+              <div id="kz-map" class="kz-map"></div>
+            </div>
+            <div id="kz-map-legend" class="map-legend"></div>
+          </article>
+          <article class="card">
+            <div class="card-head">
+              <h3>Региональная аналитика</h3>
+              <p id="kz-active-region">Все регионы</p>
+            </div>
+            <div class="actions" style="margin-bottom:10px;">
+              <button id="kz-map-reset" class="ghost" type="button">Сбросить фильтр карты</button>
+            </div>
+            <div id="kz-region-stats" class="stack"></div>
+          </article>
+        </section>
+
+        <section class="grid grid-2 screen-view" id="columns-section" data-view="records">
           <article class="card">
             <div class="card-head">
               <h3>Используемые поля</h3>
@@ -129,29 +199,7 @@
           </article>
         </section>
 
-        <section class="card" id="shortlist-section">
-          <div class="card-head">
-            <h3>Shortlist для комиссии</h3>
-          </div>
-          <div id="shortlist" class="stack"></div>
-        </section>
-
-        <section class="grid grid-2">
-          <article class="card">
-            <div class="card-head">
-              <h3>Top Ranking</h3>
-            </div>
-            <canvas id="ranking-chart" height="220"></canvas>
-          </article>
-          <article class="card">
-            <div class="card-head">
-              <h3>Score Distribution</h3>
-            </div>
-            <canvas id="distribution-chart" height="220"></canvas>
-          </article>
-        </section>
-
-        <section class="card" id="records">
+        <section class="card screen-view" id="records" data-view="records">
           <div class="card-head">
             <h3>Все заявители</h3>
             <p>Кликните по строке для объяснения и compliance-флагов.</p>
@@ -161,6 +209,20 @@
               <thead></thead>
               <tbody></tbody>
             </table>
+          </div>
+          <div class="table-pager">
+            <button id="records-prev" class="ghost" type="button">← Prev</button>
+            <div id="records-page-info" class="pager-info">Страница 1 из 1</div>
+            <button id="records-next" class="ghost" type="button">Next →</button>
+            <label class="field" style="max-width: 120px;">
+              <span>Page Size</span>
+              <select id="records-page-size">
+                <option value="25">25</option>
+                <option value="50" selected>50</option>
+                <option value="100">100</option>
+                <option value="200">200</option>
+              </select>
+            </label>
           </div>
         </section>
       </main>
@@ -176,9 +238,37 @@
         <div id="record-explanation" class="drawer-content">
           Кликните по строке таблицы для детального объяснения.
         </div>
+        <div class="drawer-content">
+          <h4>Решение комиссии</h4>
+          <label class="field">
+            <span>Решение</span>
+            <select id="decision-input">
+              <option value="APPROVE">Approve</option>
+              <option value="MANUAL_REVIEW">Manual Review</option>
+              <option value="REJECT">Reject</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Код причины</span>
+            <input id="reason-code-input" type="text" placeholder="например: COMPLIANCE_GAP" />
+          </label>
+          <label class="field">
+            <span>Комментарий</span>
+            <input id="decision-comment-input" type="text" placeholder="Комментарий комиссии" />
+          </label>
+          <label class="field">
+            <span>Эксперт</span>
+            <input id="decided-by-input" type="text" value="commission_user" />
+          </label>
+          <button id="save-decision-btn" class="primary" type="button">Сохранить решение</button>
+          <button id="download-report-btn" class="ghost" type="button">Скачать PDF отчёт</button>
+          <div id="decision-status" class="status">Решение пока не сохранено.</div>
+          <h4>Audit Trail</h4>
+          <div id="audit-log" class="stack"></div>
+        </div>
       </div>
     </aside>
 
-    <script src="/app.js"></script>
+    <script type="module" src="/app.js"></script>
   </body>
 </html>

@@ -1,6 +1,7 @@
 import { BUSINESS_COLUMNS } from "/static/js/constants.js";
+import { t } from "/static/js/i18n.js";
 
-export function renderColumns({ usedEl, excludedEl, response }) {
+export function renderColumns({ usedEl, excludedEl, response, lang = "ru" }) {
   usedEl.innerHTML = "";
   excludedEl.innerHTML = "";
   const attrs = (response.records?.[0]?.attributes) || (response.shortlist?.[0]?.attributes) || {};
@@ -17,6 +18,6 @@ export function renderColumns({ usedEl, excludedEl, response }) {
     chip.textContent = c;
     excludedEl.appendChild(chip);
   });
-  if (!usedEl.children.length) usedEl.textContent = "Нет данных.";
-  if (!excludedEl.children.length) excludedEl.textContent = "Нет исключённых полей.";
+  if (!usedEl.children.length) usedEl.textContent = t("no_data", lang);
+  if (!excludedEl.children.length) excludedEl.textContent = t("no_excluded_fields", lang);
 }

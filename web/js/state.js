@@ -10,4 +10,5 @@ export const state = {
   recordsPageSize: 50,
   recordsTotal: 0,
   lastResponse: null,
+  regionStats: [],
 };

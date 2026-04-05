@@ -236,6 +236,14 @@ def feature_importance() -> dict:
     return {"model": response.meta.selected_model, "features": response.feature_importance}
 
 
+@router.get("/api/region-stats")
+def region_stats() -> dict:
+    response = service.get_last_response()
+    if response is None:
+        raise HTTPException(status_code=400, detail="No scoring run found. Call POST /score first.")
+    return {"regions": service.get_region_stats()}
+
+
 @router.post("/api/decisions")
 def save_decision(payload: CommissionDecisionRequest) -> dict:
     decision = decision_store.save_decision(

@@ -2,6 +2,8 @@
 .gitignore
 .idea
 .venv
+.runtime
+catboost_info
 __pycache__
 *.pyc
 *.pyo
@@ -11,4 +13,3 @@ __pycache__
 *.DS_Store
 cmd/server/__pycache__
 ml/__pycache__
-

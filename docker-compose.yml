@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   subsidy-scoring:
     build:
@@ -7,8 +5,7 @@ services:
       dockerfile: Dockerfile
     container_name: subsidy-scoring-app
     ports:
-      - "8080:8080"
+      - "18080:8080"
     environment:
       - ADDR=0.0.0.0:8080
     restart: unless-stopped
-

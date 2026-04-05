@@ -65,6 +65,38 @@ class ScoringService:
         except Exception:
             logger.exception("Failed to persist scoring state")
 
+    def get_region_stats(self) -> List[Dict[str, float | int | str]]:
+        response = self.get_last_response()
+        if response is None:
+            return []
+
+        grouped: Dict[str, Dict[str, object]] = {}
+        for record in response.records:
+            region = str(record.attributes.get("Область") or record.attributes.get("область") or "").strip()
+            if not region:
+                continue
+            bucket = grouped.setdefault(region, {"scores": []})
+            scores = bucket["scores"]
+            assert isinstance(scores, list)
+            scores.append(float(record.score))
+
+        stats: List[Dict[str, float | int | str]] = []
+        for region, payload in grouped.items():
+            scores = payload["scores"]
+            assert isinstance(scores, list)
+            if not scores:
+                continue
+            stats.append({
+                "region": region,
+                "count": len(scores),
+                "mean": float(np.mean(scores)),
+                "median": float(np.median(scores)),
+                "min": float(np.min(scores)),
+                "max": float(np.max(scores)),
+            })
+        stats.sort(key=lambda item: float(item["mean"]), reverse=True)
+        return stats
+
     @staticmethod
     def _human_feature_name(name: str) -> str:
         cleaned = name.replace("fe_", "").replace("_", " ")

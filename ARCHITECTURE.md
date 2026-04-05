@@ -14,6 +14,7 @@ PugErm — это explainable AI-прототип для Case 2: ранжиро�
 - `web/index.html`
 - `web/app.js`
 - `web/styles.css`
+- `web/js/*`
 
 Функции:
 - загрузка XLSX/CSV,
@@ -21,33 +22,44 @@ PugErm — это explainable AI-прототип для Case 2: ранжиро�
 - отображение summary,
 - отображение глобальных факторов,
 - отображение shortlist,
+- отображение fairness и ranking-метрик,
 - показ используемых и исключённых полей,
-- отображение таблицы заявителей.
+- отображение таблицы заявителей,
+- карта регионов,
+- PDF-отчёт по заявителю,
+- RU/KZ переключение интерфейса.
 
 ### 2. Backend API
 
-Файл:
+Файлы:
 - `cmd/server/main.py`
+- `app/api/routes.py`
 
 Функции:
 - отдаёт веб-интерфейс,
 - принимает `POST /api/score`,
 - сохраняет загруженный файл во временную директорию,
-- запускает ML-скрипт как отдельный процесс,
+- вызывает scoring service внутри приложения,
 - возвращает JSON-результат во frontend.
 
 ### 3. ML Scoring Engine
 
-Файл:
-- `ml/score.py`
+Файлы:
+- `app/services/scoring_service.py`
+- `app/models/trainer.py`
+- `app/data/features.py`
+- `app/services/rules.py`
+- `ml/score.py` (`CLI`-обертка для локального запуска)
 
 Функции:
 - читает XLSX/CSV,
 - очищает данные,
 - исключает технические поля,
 - подготавливает признаки,
-- рассчитывает score,
+- запускает supervised/proxy-supervised/unsupervised scoring,
+- рассчитывает финальный score,
 - выделяет глобальные и локальные факторы,
+- рассчитывает compliance / eligibility / fraud / growth сигналы,
 - формирует shortlist.
 
 ## Поток данных
@@ -55,17 +67,63 @@ PugErm — это explainable AI-прототип для Case 2: ранжиро�
 1. Пользователь открывает веб-интерфейс.
 2. Загружает файл или использует встроенный `Data.xlsx`.
 3. Frontend отправляет `POST /api/score`.
-4. Backend вызывает `ml/score.py`.
-5. ML-модуль:
+4. Backend вызывает `ScoringService.run_scoring(...)`.
+5. Сервис:
    - загружает данные,
    - удаляет пустые поля,
    - исключает идентификаторы и технические колонки,
    - строит признаки,
-   - рассчитывает score,
+   - определяет доступный режим обучения,
+   - запускает ML ranking,
+   - применяет compliance / eligibility / fraud / growth слой,
    - формирует explanations,
    - возвращает JSON.
 6. Backend отдаёт JSON во frontend.
-7. Frontend показывает shortlist, summary и факторы.
+7. Frontend показывает shortlist, summary, факторы, карту, аналитику и PDF.
+
+## Режимы скоринга
+
+### 1. Supervised ranking
+
+Если есть валидный `target`, используется stacking ensemble:
+- `XGBoost`
+- `LightGBM`
+- `CatBoost`
+- meta-model поверх out-of-fold predictions
+
+Explainability:
+- глобальная importance,
+- локальные SHAP-факторы,
+- breakdown итогового скора.
+
+### 2. Proxy-supervised ranking
+
+Если явного target нет, система пытается построить proxy-target:
+- по статусу,
+- по utility-сигналу статуса и суммы,
+- по amount-based proxy.
+
+Это не “идеальный ground truth”, а прагматичный fallback для реальных госданных.
+
+### 3. Unsupervised fallback
+
+Если supervised target отсутствует полностью:
+- используется `TruncatedSVD`,
+- строится latent ranking signal,
+- система остаётся рабочей и explainable.
+
+## Финальная логика score
+
+Итоговый score собирается из нескольких слоев:
+
+```text
+FinalScore = 0.60*ML + 0.20*Compliance + 0.12*Growth + 0.08*FraudSafety
+```
+
+Дополнительно:
+- eligibility failures дают сильный penalty,
+- rule-based policy checks остаются видимыми для комиссии,
+- окончательное решение принимает человек.
 
 ## Логика explainability
 
@@ -81,26 +139,43 @@ Explainability реализован на двух уровнях:
 - используемые поля,
 - исключённые поля и причины исключения.
 
-## Почему решение соответствует Stage 1
+Также доступны:
+- PDF-отчёт по заявителю,
+- compliance flags,
+- fairness summary,
+- ranking metrics против FCFS baseline.
 
-Для первого этапа в репозитории уже есть:
-- минимально рабочий элемент,
-- API,
-- ML-модуль,
-- интерфейс для демонстрации,
-- объяснимый результат.
+## Regulatory слой
 
-Это соответствует формату:
-- scoring / ranking engine,
-- web platform / dashboard,
-- explainable AI prototype.
+Нормативная логика применяется через кодовые справочники и rules:
+- допустимые нормы,
+- субсидийные программы,
+- eligibility и consistency checks,
+- отдельные anti-fraud сигналы.
+
+Важно:
+- `.regulatory` PDF не парсятся автоматически в рантайме;
+- в scoring используются уже вынесенные в код нормативные данные.
+
+## Почему решение соответствует финальному прототипу
+
+В репозитории уже есть:
+- рабочий scoring engine,
+- web dashboard,
+- explainable AI,
+- human-in-the-loop decision flow,
+- audit trail,
+- PDF export,
+- state restore после рестарта,
+- Docker-запуск.
 
 ## Ограничения архитектуры
 
 - Пока нет БД и постоянного хранения результатов.
 - Пока нет очереди задач и фоновой обработки.
 - Пока нет аутентификации и разграничения ролей.
-- ML-режим зависит от качества и структуры входного датасета.
+- ML-режим сильно зависит от качества входного `target` или proxy-target.
+- `.regulatory` документы пока не используются как автоматический NLP-source.
 - На больших объёмах данных возможны задержки ответа.
 
 ## Расширение на следующие этапы

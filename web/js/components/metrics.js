@@ -1,4 +1,6 @@
-export function renderSummary({ el, meta, sourceRecords }) {
+import { t } from "/static/js/i18n.js";
+
+export function renderSummary({ el, meta, sourceRecords, lang = "ru" }) {
   el.innerHTML = "";
   if (!meta) return;
   const recommended = sourceRecords.filter(r => r.recommended).length;
@@ -7,12 +9,12 @@ export function renderSummary({ el, meta, sourceRecords }) {
   const lift = meta.ranking_metrics?.topk_gain_lift_pct_vs_fcfs;
 
   const items = [
-    { label: "Заявителей", value: meta.rows },
-    { label: "Скор среднее", value: meta.score_mean?.toFixed(1) },
-    { label: "Рекомендованы", value: recommended },
-    { label: "Высокий риск", value: highRisk },
+    { label: t("summary_applicants", lang), value: meta.rows },
+    { label: t("summary_mean", lang), value: meta.score_mean?.toFixed(1) },
+    { label: t("summary_recommended", lang), value: recommended },
+    { label: t("summary_high_risk", lang), value: highRisk },
     { label: "NDCG@20", value: ndcg != null ? ndcg : "—" },
-    { label: "Lift vs FCFS%", value: lift != null ? `+${lift}%` : "—" },
+    { label: t("summary_lift", lang), value: lift != null ? `+${lift}%` : "—" },
   ];
 
   items.forEach(item => {
@@ -23,16 +25,16 @@ export function renderSummary({ el, meta, sourceRecords }) {
   });
 }
 
-export function renderRankingMetrics({ el, metrics }) {
+export function renderRankingMetrics({ el, metrics, lang = "ru" }) {
   if (!el) return;
   el.innerHTML = "";
   if (!metrics) return;
   const items = [
-    { label: "NDCG@20 (наша модель)", value: metrics.ndcg_at_20_model },
-    { label: "NDCG@20 (FCFS baseline)", value: metrics.ndcg_at_20_baseline_fcfs },
-    { label: "Precision@20 (модель)", value: metrics.precision_at_20_model },
-    { label: "Precision@20 (FCFS)", value: metrics.precision_at_20_baseline_fcfs },
-    { label: "Lift vs FCFS, %", value: metrics.topk_gain_lift_pct_vs_fcfs != null ? `+${metrics.topk_gain_lift_pct_vs_fcfs}` : "—" },
+    { label: t("metrics_model_ndcg", lang), value: metrics.ndcg_at_20_model },
+    { label: t("metrics_base_ndcg", lang), value: metrics.ndcg_at_20_baseline_fcfs },
+    { label: t("metrics_model_precision", lang), value: metrics.precision_at_20_model },
+    { label: t("metrics_base_precision", lang), value: metrics.precision_at_20_baseline_fcfs },
+    { label: t("metrics_lift", lang), value: metrics.topk_gain_lift_pct_vs_fcfs != null ? `+${metrics.topk_gain_lift_pct_vs_fcfs}` : "—" },
   ];
   items.forEach(item => {
     const card = document.createElement("div");

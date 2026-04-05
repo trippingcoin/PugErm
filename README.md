@@ -51,17 +51,87 @@ Data.xlsx
 
 ## ML и скоринг
 
-Основной supervised режим:
+Система работает в трех режимах, в зависимости от качества входных данных:
+
+### 1. Supervised / Proxy-supervised
+
+Если во входном датасете есть валидный `target` или его можно разумно вывести из бизнес-колонок, используется supervised ranking:
 - stacking ensemble (`XGBoost`, `LightGBM`, `CatBoost`, если доступны),
-- SHAP explainability,
-- fallback режимы при недоступности части backend’ов,
-- unsupervised fallback при отсутствии валидного target.
+- кросс-валидация для base-models,
+- SHAP explainability для локальных и глобальных факторов.
+
+Если явного `target` нет, система пытается построить proxy-target:
+- по статусам заявок,
+- по utility-сигналу на основе статуса и суммы,
+- по proxy-amount threshold.
+
+Важно для защиты:
+- это decision-support scoring, а не окончательная автоматическая истина;
+- при слабом target система честно деградирует в proxy-режим, а не делает вид, что обучилась на идеальной целевой переменной.
+
+### 2. Unsupervised fallback
+
+Если валидного supervised target нет совсем, используется unsupervised fallback:
+- преобразование признаков,
+- `TruncatedSVD`,
+- ранжирование по latent utility signal.
+
+Этот режим нужен, чтобы прототип оставался рабочим на реальных “грязных” госдатасетах, где target часто отсутствует.
+
+### 3. Rule-based compliance layer
+
+Поверх ML-ранжирования применяется отдельный explainable rules/compliance слой:
+- eligibility checks,
+- policy and consistency checks,
+- fraud-safety heuristics,
+- growth signals,
+- fairness summary по регионам.
 
 Формула финального скора:
 
 ```text
 FinalScore = 0.60*ML + 0.20*Compliance + 0.12*Growth + 0.08*FraudSafety
 ```
+
+Если заявка не проходит базовые eligibility-критерии, итоговый скор получает сильный penalty.
+
+## Что именно является AI в решении
+
+В решении используются:
+- supervised ML ranking / proxy-supervised ranking,
+- SHAP explainability,
+- anomaly-style fraud signal через `IsolationForest`,
+- feature engineering и региональное enrichment.
+
+Что не делаем:
+- не заменяем комиссию автоматическим решением,
+- не выдаем black-box ответ без объяснения,
+- не маскируем heuristic-часть под “чистый ML”.
+
+## Regulatory rules
+
+Нормативная логика присутствует в scoring pipeline, но не как прямой OCR/NLP-парсинг PDF.
+
+Сейчас используется:
+- структурированная rule-base и справочники нормативов в коде,
+- compliance / eligibility checks,
+- валидация субсидий, нормативов, сроков, статусов и отдельных risk-сигналов.
+
+Это важно формулировать честно на защите:
+- `.regulatory` документы лежат в репозитории как reference;
+- в рантайме используются уже вынесенные в код нормы и правила.
+
+## Почему это лучше FCFS
+
+Текущий прототип сравнивает ranking модели с FCFS baseline через ranking-метрики:
+- `NDCG@20`,
+- `Precision@20`,
+- `Lift vs FCFS`.
+
+На защите основной тезис должен быть таким:
+- FCFS учитывает только порядок подачи;
+- AgriScore учитывает продуктивность, compliance, риск и growth potential;
+- shortlist становится более аргументированным и проверяемым.
 
 ## API
 
@@ -79,6 +149,7 @@ FinalScore = 0.60*ML + 0.20*Compliance + 0.12*Growth + 0.08*FraudSafety
 - `GET /api/top`
 - `GET /api/records?page=&page_size=&region=&farm_size=&subsidy_type=`
 - `GET /api/feature-importance`
+- `GET /api/region-stats`
 - `GET /api/scenario/simulate`
 
 Комиссия и аудит:
@@ -101,11 +172,14 @@ FinalScore = 0.60*ML + 0.20*Compliance + 0.12*Growth + 0.08*FraudSafety
 - экранная навигация (overview / shortlist / records / analytics / geo),
 - серверная пагинация таблицы заявителей,
 - прогресс-бар на время скоринга,
+- локализация RU/KZ,
 - PDF-кнопки:
   - в drawer,
   - в карточках shortlist,
   - в строках большой таблицы,
-- карта Казахстана (SVG), фильтр по региону кликом.
+- карта Казахстана (SVG), фильтр по региону кликом,
+- zoom/pan/reset на карте,
+- аналитические графики распределения score и top ranking.
 
 ## Live enrichment (опционально)
 
@@ -158,6 +232,7 @@ MPLCONFIGDIR=.runtime/matplotlib .venv/bin/python cmd/server/main.py
 curl http://localhost:8080/health
 curl http://localhost:8080/api/diagnostics
 curl "http://localhost:8080/api/score/last?compact=1"
+curl "http://localhost:8080/api/region-stats"
 ```
 
 ## Troubleshooting
@@ -174,3 +249,10 @@ brew install libomp
 
 Это ожидаемо на больших данных: stacking + CV + SHAP + rules/fairness.  
 Для демо используйте `compact=1` и серверную пагинацию (уже включено во фронте).
+
+## Ограничения
+
+- качество финального ranking зависит от качества доступного target или proxy-target;
+- часть explainability строится на SHAP, часть на deterministic business-rules;
+- `.regulatory` PDF не анализируются автоматически в рантайме;
+- это прототип для поддержки решения комиссии, а не production policy engine.

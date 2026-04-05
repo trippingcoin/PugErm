@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import io
+from functools import lru_cache
 
 from reportlab.lib.colors import HexColor, black, white
-from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import HRFlowable, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 
@@ -18,8 +20,26 @@ RED = HexColor("#DC2626")
 LIGHT_GRAY = HexColor("#F9FAFB")
 MID_GRAY = HexColor("#6B7280")
 
+FONT_REGULAR = "AgriScoreSans"
+FONT_BOLD = "AgriScoreSans-Bold"
+FONT_ITALIC = "AgriScoreSans-Italic"
+
+
+@lru_cache(maxsize=1)
+def _ensure_pdf_fonts() -> None:
+    from matplotlib import font_manager
+
+    regular_path = font_manager.findfont("DejaVu Sans", fallback_to_default=True)
+    bold_path = font_manager.findfont(font_manager.FontProperties(family="DejaVu Sans", weight="bold"), fallback_to_default=True)
+    italic_path = font_manager.findfont(font_manager.FontProperties(family="DejaVu Sans", style="italic"), fallback_to_default=True)
+
+    pdfmetrics.registerFont(TTFont(FONT_REGULAR, regular_path))
+    pdfmetrics.registerFont(TTFont(FONT_BOLD, bold_path))
+    pdfmetrics.registerFont(TTFont(FONT_ITALIC, italic_path))
+
 
 def build_applicant_report_pdf(record, lang: str = "ru") -> bytes:
+    _ensure_pdf_fonts()
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer,
@@ -35,21 +55,23 @@ def build_applicant_report_pdf(record, lang: str = "ru") -> bytes:
         "title",
         fontSize=20,
         textColor=DARK_BLUE,
-        fontName="Helvetica-Bold",
+        fontName=FONT_BOLD,
         spaceAfter=6,
+        leading=24,
     )
     sub_style = ParagraphStyle(
         "sub",
         fontSize=11,
         textColor=MID_GRAY,
-        fontName="Helvetica",
+        fontName=FONT_REGULAR,
         spaceAfter=12,
+        leading=14,
     )
     body_style = ParagraphStyle(
         "body",
         fontSize=10,
         textColor=black,
-        fontName="Helvetica",
+        fontName=FONT_REGULAR,
         spaceAfter=6,
         leading=14,
     )
@@ -57,7 +79,7 @@ def build_applicant_report_pdf(record, lang: str = "ru") -> bytes:
         "label",
         fontSize=9,
         textColor=MID_GRAY,
-        fontName="Helvetica",
+        fontName=FONT_REGULAR,
         spaceAfter=2,
     )
 
@@ -102,11 +124,11 @@ def build_applicant_report_pdf(record, lang: str = "ru") -> bytes:
         [
             Paragraph(
                 f"<font size='32' color='#{score_hex}'><b>{score:.1f}</b></font>",
-                styles["Normal"],
+                ParagraphStyle("score_big", parent=styles["Normal"], fontName=FONT_BOLD),
             ),
             Paragraph(
                 f"<b>{recommended_text}</b><br/>Уровень риска: {record.risk_level.upper()}",
-                styles["Normal"],
+                ParagraphStyle("score_meta", parent=styles["Normal"], fontName=FONT_REGULAR, leading=16),
             ),
         ]
     ]
@@ -115,9 +137,9 @@ def build_applicant_report_pdf(record, lang: str = "ru") -> bytes:
         TableStyle(
             [
                 ("BACKGROUND", (0, 0), (-1, -1), LIGHT_GRAY),
-                ("ROUNDEDCORNERS", [8]),
                 ("PADDING", (0, 0), (-1, -1), 12),
                 ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("BOX", (0, 0), (-1, -1), 0.5, HexColor("#E5E7EB")),
             ]
         )
     )
@@ -139,11 +161,12 @@ def build_applicant_report_pdf(record, lang: str = "ru") -> bytes:
             [
                 ("BACKGROUND", (0, 0), (-1, 0), DARK_BLUE),
                 ("TEXTCOLOR", (0, 0), (-1, 0), white),
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTNAME", (0, 0), (-1, 0), FONT_BOLD),
                 ("FONTSIZE", (0, 0), (-1, -1), 9),
                 ("BACKGROUND", (0, -1), (-1, -1), TEAL),
                 ("TEXTCOLOR", (0, -1), (-1, -1), white),
-                ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+                ("FONTNAME", (0, -1), (-1, -1), FONT_BOLD),
+                ("FONTNAME", (0, 1), (-1, -2), FONT_REGULAR),
                 ("ROWBACKGROUNDS", (0, 1), (-1, -2), [white, LIGHT_GRAY]),
                 ("GRID", (0, 0), (-1, -1), 0.5, MID_GRAY),
                 ("PADDING", (0, 0), (-1, -1), 6),
@@ -162,7 +185,7 @@ def build_applicant_report_pdf(record, lang: str = "ru") -> bytes:
             ParagraphStyle(
                 "bold_label",
                 fontSize=10,
-                fontName="Helvetica-Bold",
+                fontName=FONT_BOLD,
                 textColor=GREEN,
             ),
         )
@@ -176,7 +199,7 @@ def build_applicant_report_pdf(record, lang: str = "ru") -> bytes:
             ParagraphStyle(
                 "bold_neg",
                 fontSize=10,
-                fontName="Helvetica-Bold",
+                fontName=FONT_BOLD,
                 textColor=RED,
             ),
         )
@@ -194,7 +217,7 @@ def build_applicant_report_pdf(record, lang: str = "ru") -> bytes:
                 ParagraphStyle(
                     "warn",
                     fontSize=10,
-                    fontName="Helvetica-Bold",
+                    fontName=FONT_BOLD,
                     textColor=RED,
                 ),
             )
@@ -211,7 +234,8 @@ def build_applicant_report_pdf(record, lang: str = "ru") -> bytes:
                 "disclaimer",
                 fontSize=8,
                 textColor=MID_GRAY,
-                fontName="Helvetica-Oblique",
+                fontName=FONT_ITALIC,
+                leading=11,
             ),
         )
     )

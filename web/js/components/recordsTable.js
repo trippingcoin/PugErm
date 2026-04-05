@@ -1,7 +1,17 @@
 import { BUSINESS_COLUMNS } from "/static/js/constants.js";
 import { riskClass, scoreClass } from "/static/js/utils.js";
+import { riskLabel, t } from "/static/js/i18n.js";
 
-export function renderRecordsTable({ headEl, bodyEl, records, total, page, pageSize, onSelect, onDownloadPdf }) {
+const COL_LABELS = {
+  rank: { ru: "Ранг", kz: "Ранг" },
+  id: { ru: "ID", kz: "ID" },
+  score: { ru: "Скор", kz: "Скор" },
+  decision: { ru: "Решение", kz: "Шешім" },
+  risk_level: { ru: "Риск", kz: "Тәуекел" },
+  actions: { ru: "Действия", kz: "Әрекеттер" },
+};
+
+export function renderRecordsTable({ headEl, bodyEl, records, total, page, pageSize, onSelect, onDownloadPdf, lang = "ru" }) {
   headEl.innerHTML = "";
   bodyEl.innerHTML = "";
   if (!records.length) return;
@@ -13,7 +23,7 @@ export function renderRecordsTable({ headEl, bodyEl, records, total, page, pageS
   const headerRow = document.createElement("tr");
   cols.forEach(col => {
     const th = document.createElement("th");
-    th.textContent = col;
+    th.textContent = COL_LABELS[col]?.[lang] || col;
     headerRow.appendChild(th);
   });
   headEl.appendChild(headerRow);
@@ -27,7 +37,7 @@ export function renderRecordsTable({ headEl, bodyEl, records, total, page, pageS
       else if (col === "id") td.textContent = record.id;
       else if (col === "score") td.innerHTML = `<span class="score-badge ${scoreClass(record.score)}">${record.score.toFixed(1)}</span>`;
       else if (col === "decision") td.textContent = record.decision || "";
-      else if (col === "risk_level") td.innerHTML = `<span class="risk-badge ${riskClass(record.risk_level)}">${record.risk_level || ""}</span>`;
+      else if (col === "risk_level") td.innerHTML = `<span class="risk-badge ${riskClass(record.risk_level)}">${riskLabel(record.risk_level, lang)}</span>`;
       else if (col === "actions") {
         td.innerHTML = `<button class="ghost row-pdf-btn" type="button" style="padding:3px 8px;font-size:11px;">PDF</button>`;
         td.querySelector(".row-pdf-btn")?.addEventListener("click", evt => {

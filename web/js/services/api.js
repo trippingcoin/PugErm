@@ -26,6 +26,10 @@ export async function getScenarioApi() {
   return fetch("/api/scenario/simulate?top_n=100");
 }
 
+export async function getRegionStatsApi() {
+  return fetch("/api/region-stats");
+}
+
 export async function getDecisionApi(applicationId) {
   return fetch(`/api/decisions/${encodeURIComponent(applicationId)}`);
 }

@@ -1,4 +1,5 @@
 import { buildNarrativeText, riskClass, scoreClass } from "/static/js/utils.js";
+import { riskLabel, t } from "/static/js/i18n.js";
 
 export function renderRecordExplanation({ explanationEl, record, currentLang }) {
   const bd = record.breakdown || {};
@@ -47,33 +48,33 @@ export function renderRecordExplanation({ explanationEl, record, currentLang }) 
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px;">
       <strong style="font-size:15px;">ID: ${record.id}</strong>
       <span class="score-badge ${scoreClass(record.score)}" style="font-size:14px;">${record.score.toFixed(1)}</span>
-      <span class="risk-badge ${riskClass(record.risk_level)}">${record.risk_level}</span>
-      ${record.recommended ? '<span class="score-badge score-high">✓ Рекомендован</span>' : '<span class="score-badge score-mid">На рассмотрение</span>'}
+      <span class="risk-badge ${riskClass(record.risk_level)}">${riskLabel(record.risk_level, currentLang)}</span>
+      ${record.recommended ? `<span class="score-badge score-high">✓ ${t("recommended", currentLang)}</span>` : `<span class="score-badge score-mid">${t("recommended_review", currentLang)}</span>`}
     </div>
     <span style="font-size:11px;color:var(--text-muted);">Ранг #${record.rank} | ${record.decision || "—"}</span>
 
     <div style="margin-top:12px;">
-      <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px;">Разбивка скора</div>
+      <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px;">${t("breakdown_title", currentLang)}</div>
       ${breakdownHtml}
     </div>
 
     <div style="margin-top:4px;">
-      <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px;">SHAP — вклад факторов</div>
+      <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px;">${t("shap_title", currentLang)}</div>
       ${shapHtml || '<span style="color:var(--text-muted);font-size:12px;">SHAP данные не доступны</span>'}
     </div>
 
     <div style="margin-top:10px;padding:10px 12px;background:var(--bg-elevated);border-radius:var(--radius-sm);border:1px solid var(--border);">
-      <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px;">Текстовое объяснение (${currentLang.toUpperCase()})</div>
+      <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px;">${t("text_explanation", currentLang, { lang: currentLang.toUpperCase() })}</div>
       <div style="font-size:12px;color:var(--text-secondary);line-height:1.6;white-space:pre-line;">${narrative}</div>
     </div>
 
-    ${pos.length ? `<div style="margin-top:8px;"><div style="font-size:11px;color:var(--green);font-weight:700;margin-bottom:4px;">▲ Позитивные факторы</div>${pos.map(p => `<div style="font-size:12px;color:var(--text-secondary);margin-bottom:3px;">${p}</div>`).join("")}</div>` : ""}
-    ${neg.length ? `<div style="margin-top:8px;"><div style="font-size:11px;color:var(--red);font-weight:700;margin-bottom:4px;">▼ Факторы риска</div>${neg.map(n => `<div style="font-size:12px;color:var(--text-secondary);margin-bottom:3px;">${n}</div>`).join("")}</div>` : ""}
+    ${pos.length ? `<div style="margin-top:8px;"><div style="font-size:11px;color:var(--green);font-weight:700;margin-bottom:4px;">${t("positive_factors", currentLang)}</div>${pos.map(p => `<div style="font-size:12px;color:var(--text-secondary);margin-bottom:3px;">${p}</div>`).join("")}</div>` : ""}
+    ${neg.length ? `<div style="margin-top:8px;"><div style="font-size:11px;color:var(--red);font-weight:700;margin-bottom:4px;">${t("negative_factors", currentLang)}</div>${neg.map(n => `<div style="font-size:12px;color:var(--text-secondary);margin-bottom:3px;">${n}</div>`).join("")}</div>` : ""}
 
     ${failed.length ? `
     <div style="margin-top:12px;padding:10px 12px;background:var(--red-dim);border:1px solid rgba(248,113,113,0.25);border-radius:var(--radius-sm);">
-      <div style="font-size:11px;font-weight:700;color:var(--red);margin-bottom:6px;">⚠ Нарушения Compliance (${failed.length})</div>
+      <div style="font-size:11px;font-weight:700;color:var(--red);margin-bottom:6px;">${t("compliance_violations", currentLang, { count: failed.length })}</div>
       ${failed.map(f => `<div style="font-size:11px;color:var(--text-secondary);margin-bottom:3px;">[${f.severity.toUpperCase()}] <b>${f.code}</b>: ${f.message}</div>`).join("")}
-    </div>` : `<div style="padding:8px 12px;background:var(--green-dim);border-radius:var(--radius-sm);font-size:11px;color:var(--green);">✓ Нарушений не выявлено</div>`}
+    </div>` : `<div style="padding:8px 12px;background:var(--green-dim);border-radius:var(--radius-sm);font-size:11px;color:var(--green);">${t("no_violations", currentLang)}</div>`}
   `;
 }
